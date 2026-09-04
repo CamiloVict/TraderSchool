@@ -19,6 +19,7 @@ import pandas as pd
 from config import SYMBOL, TIMEFRAME
 from context_engine.engine import build_context
 from context_engine.params import CONTEXT_ENGINE_VERSION
+from context_engine.schema import MarketState
 from context_engine.timeframes import build_timeframe_set
 from context_engine.validation import DataValidationError
 
@@ -44,7 +45,8 @@ def summarize(snapshot) -> str:
         f"  timeframes    {data['multi_timeframe']}  -> {data['alignment']}",
         f"  bias          {data['bias']['direction']} (confidence {data['bias']['confidence']})",
         f"  score         {data['context_score']['total']} -> {data['context_score']['label']}",
-        f"  state         {data['market_state']}",
+        f"  state         {data['market_state']}"
+        + (f"  (was {data['previous_market_state']})" if data["previous_market_state"] else ""),
         f"  direction     {data['preferred_direction']}",
         f"  range         {data['range']['name']} {data['range']['zone']} "
         f"({data['range']['position_percent']}%)",
@@ -57,6 +59,14 @@ def summarize(snapshot) -> str:
         lines.append("")
         lines.append("  reasons:")
         lines.extend(f"    - {reason}" for reason in data["bias"]["reasons"])
+
+    if data["setups"]:
+        lines.append("")
+        lines.append("  setups:")
+        for setup in data["setups"]:
+            lines.append(f"    - {setup['name']} ({setup['direction']})")
+            lines.extend(f"        - {reason}" for reason in setup["reasons"])
+            lines.append(f"        invalidation: {setup['invalidation']['detail']}")
 
     if data["avoid"]:
         lines.append("")
@@ -104,7 +114,25 @@ def main() -> None:
         action="store_true",
         help="Build a snapshot even when the candles fail validation (marked in data_quality)",
     )
+    parser.add_argument(
+        "--previous-state",
+        metavar="STATE",
+        help=(
+            "market_state from the last snapshot in this sequence (e.g. from a "
+            "previously exported context.json), so the state machine can bound how "
+            "it's allowed to change instead of treating this as the first snapshot ever."
+        ),
+    )
     args = parser.parse_args()
+
+    previous_state = None
+    if args.previous_state:
+        try:
+            previous_state = MarketState(args.previous_state)
+        except ValueError:
+            valid = ", ".join(state.value for state in MarketState)
+            print(f"--previous-state {args.previous_state!r} is not a MarketState. Valid: {valid}")
+            sys.exit(1)
 
     print(
         f"Fetching {args.symbol} {args.timeframe} history from {args.source} "
@@ -119,7 +147,9 @@ def main() -> None:
     frames = build_timeframe_set(history, base_timeframe=args.timeframe)
 
     try:
-        snapshot = build_context(frames, asset=args.symbol, strict=not args.allow_degraded)
+        snapshot = build_context(
+            frames, asset=args.symbol, strict=not args.allow_degraded, previous_state=previous_state
+        )
     except DataValidationError as exc:
         print(f"Refusing to build a context on invalid data:\n  {exc}")
         print("\nRe-run with --allow-degraded to build one anyway.")

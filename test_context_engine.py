@@ -53,7 +53,9 @@ CONTRACT_KEYS = {
     "bias",
     "context_score",
     "market_state",
+    "previous_market_state",
     "preferred_direction",
+    "setups",
     "preferred_setups",
     "avoid",
     "no_trade",
@@ -189,10 +191,87 @@ class ContractTests(unittest.TestCase):
 
         self.assertEqual(first.to_dict(), second.to_dict())
 
-    def test_preferred_setups_stays_empty_until_the_setup_engine_exists(self):
+    def test_preferred_setups_is_empty_when_no_setup_confirms(self):
+        # This fixture's bias/liquidity/structure combination doesn't
+        # happen to satisfy LIQUIDITY_SWEEP_RECLAIM — see
+        # test_context_setups.py for the Setup Engine's own tests of
+        # what does and doesn't confirm it.
         frames = build_timeframe_set(synthetic_hourly())
 
-        self.assertEqual(build_context(frames).preferred_setups, [])
+        snapshot = build_context(frames)
+
+        self.assertEqual(snapshot.setups, [])
+        self.assertEqual(snapshot.preferred_setups, [])
+
+    def test_previous_state_is_recorded_on_the_snapshot(self):
+        frames = build_timeframe_set(trending_hourly())
+
+        snapshot = build_context(frames, previous_state=MarketState.RANGE)
+
+        self.assertEqual(snapshot.previous_market_state, MarketState.RANGE)
+
+    def test_leaving_a_risk_override_state_is_immediate(self):
+        # trending_hourly() is known (TrendingMarketTests) not to be
+        # no_trade, so if state_machine.next_state's override-exit
+        # rule is actually wired through build_context, market_state
+        # here must not still read NO_TRADE just because it was the
+        # state last time.
+        frames = build_timeframe_set(trending_hourly())
+
+        snapshot = build_context(frames, previous_state=MarketState.NO_TRADE)
+
+        self.assertNotEqual(snapshot.market_state, MarketState.NO_TRADE)
+
+    def test_a_confirmed_setup_is_surfaced_when_the_state_allows_it(self):
+        """Setup-detection correctness (every branch of what does and
+        doesn't confirm) is test_context_setups.py's job. This checks
+        only that build_context() actually wires detect_setups()'s
+        output into the snapshot — stubbed here because reliably
+        triggering a real sweep-reclaim-displacement-BOS chain through
+        the full structure+liquidity pipeline needs a much longer,
+        more contrived fixture than the wiring itself warrants."""
+        from unittest.mock import patch
+
+        from context_engine.schema import Direction, Invalidation, Setup, SetupName
+
+        frames = build_timeframe_set(trending_hourly())
+        fake_setup = Setup(
+            name=SetupName.LIQUIDITY_SWEEP_RECLAIM,
+            direction=Direction.LONG,
+            reasons=["fake"],
+            invalidation=Invalidation(type="CLOSE_BELOW", level=1.0, detail="fake"),
+        )
+
+        with patch("context_engine.engine.detect_setups", return_value=[fake_setup]):
+            snapshot = build_context(frames)  # known not to be no_trade
+
+        self.assertIn(fake_setup, snapshot.setups)
+        self.assertIn("LIQUIDITY_SWEEP_RECLAIM", snapshot.preferred_setups)
+
+    def test_a_setup_forbidden_by_the_current_state_is_filtered_out(self):
+        from unittest.mock import patch
+
+        from context_engine.schema import Direction, Invalidation, Setup, SetupName
+
+        frames = build_timeframe_set(trending_hourly())
+        fake_setup = Setup(
+            name=SetupName.LIQUIDITY_SWEEP_RECLAIM,
+            direction=Direction.LONG,
+            reasons=["fake"],
+            invalidation=Invalidation(type="CLOSE_BELOW", level=1.0, detail="fake"),
+        )
+        event = MarketEvent(
+            event="CPI", importance="HIGH", time="13:30", currency="USD", minutes_to_event=5
+        )
+
+        with patch("context_engine.engine.detect_setups", return_value=[fake_setup]):
+            # An imminent high-impact event forces no_trade -> the final
+            # state is NO_TRADE, which forbids every setup.
+            snapshot = build_context(frames, events=[event])
+
+        self.assertTrue(snapshot.no_trade)
+        self.assertEqual(snapshot.setups, [])
+        self.assertEqual(snapshot.preferred_setups, [])
 
     def test_risk_block_mirrors_the_configured_limits(self):
         frames = build_timeframe_set(synthetic_hourly())

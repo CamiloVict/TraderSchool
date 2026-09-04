@@ -139,6 +139,16 @@ class Direction(str, Enum):
     NONE = "NONE"
 
 
+class SetupName(str, Enum):
+    """Master prompt section 17. One member per setup the Setup Engine
+    knows how to detect — deliberately starting with just one; adding a
+    name here without a matching detector in context_engine/setups.py
+    would be exactly the kind of setup the design forbids (defined but
+    never actually checked)."""
+
+    LIQUIDITY_SWEEP_RECLAIM = "LIQUIDITY_SWEEP_RECLAIM"
+
+
 class Severity(str, Enum):
     """A data problem that is `FATAL` stops the engine; `WARNING` lets
     it run but stamps the snapshot as degraded so a downstream reader
@@ -310,6 +320,21 @@ class Invalidation:
 
 
 @dataclass(frozen=True)
+class Setup:
+    """One detected trade setup (master prompt section 17/35), in the
+    same evidence-carrying shape as BiasHypothesis: a name and
+    direction alone are not falsifiable, so every setup also carries
+    what confirmed it (`reasons`) and what would prove it wrong
+    (`invalidation`) — reusing the same Invalidation the bias itself
+    uses, since for this setup they are the same structural level."""
+
+    name: SetupName
+    direction: Direction
+    reasons: list[str]
+    invalidation: Invalidation
+
+
+@dataclass(frozen=True)
 class ContextSnapshot:
     """The Daily Market Context. One immutable answer to "what is the
     market doing right now, and what would prove me wrong"."""
@@ -330,10 +355,18 @@ class ContextSnapshot:
     bias: BiasHypothesis
     context_score: ContextScore
     market_state: MarketState
+    # None only for the very first snapshot in a sequence (no prior
+    # state to have transitioned from). See state_machine.next_state —
+    # market_state above is already the post-transition value; this is
+    # the state it moved on from, kept for observability (was this
+    # state reached the normal way, or did the transition table hold
+    # it here from something else last time?).
+    previous_market_state: MarketState | None
     preferred_direction: Direction
-    # Always empty in this milestone: populating it is the Setup
-    # Engine's job, and guessing here would be exactly the "pattern ->
-    # order" shortcut the design forbids.
+    setups: list[Setup]
+    # Names only, derived from `setups` above — kept as a separate,
+    # simpler field because it existed before setups did and other
+    # code (the dashboard, the CLI summary) already reads it that way.
     preferred_setups: list[str]
     avoid: list[str]
     no_trade: bool

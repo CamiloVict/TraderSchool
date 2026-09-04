@@ -33,6 +33,8 @@ from context_engine.ranges import analyze_ranges, primary_range
 from context_engine.regime import classify_regime, classify_state
 from context_engine.scoring import score_context
 from context_engine.sessions import analyze_sessions
+from context_engine.setups import detect_setups
+from context_engine.state_machine import allowed_setup_names, next_state
 from context_engine.structure import analyze_structure
 from context_engine.timeframes import build_timeframe_set, slice_frames_until
 from context_engine.validation import assert_valid, validate_frames
@@ -63,6 +65,7 @@ def build_context(
     swing_left: int = SWING_LEFT,
     swing_right: int = SWING_RIGHT,
     strict: bool = True,
+    previous_state: MarketState = None,
 ) -> ContextSnapshot:
     """Build the Daily Market Context.
 
@@ -77,6 +80,13 @@ def build_context(
 
     With `strict` (the default), fatal data problems raise rather than
     producing a confident-looking snapshot built on broken candles.
+
+    `previous_state` is the `market_state` from the last time this was
+    called for this asset (None for the first call in a sequence). It
+    is what lets state_machine.next_state() bound how a state can
+    change instead of re-classifying from scratch every candle — this
+    function stays pure either way (it never reads that history
+    itself; the caller is responsible for threading it through).
     """
     events = list(events or [])
     frames = {tf: df for tf, df in (frames or {}).items() if df is not None and not df.empty}
@@ -95,7 +105,7 @@ def build_context(
         assert_valid(quality)
 
     if not frames:
-        return _empty_snapshot(asset, as_of, quality, events, risk)
+        return _empty_snapshot(asset, as_of, quality, events, risk, previous_state)
 
     # Fall back to the densest available timeframe when the usual
     # execution one is absent (`or` would ask a DataFrame for its
@@ -131,7 +141,8 @@ def build_context(
 
     # 8. REGIME and state.
     regime = classify_regime(structures, volatility, alignment)
-    market_state = classify_state(regime, structures, liquidity, volatility, range_state)
+    classified_state = classify_state(regime, structures, liquidity, volatility, range_state)
+    market_state = next_state(previous_state, classified_state)
 
     # 9. SCORE.
     score = score_context(
@@ -157,6 +168,15 @@ def build_context(
 
     no_trade = bool(avoid) or market_state is MarketState.NO_TRADE
     preferred = _preferred_direction(direction, no_trade)
+    final_state = MarketState.NO_TRADE if no_trade else market_state
+
+    # 10. SETUPS — only the ones the current state actually allows.
+    # A state forbidding a setup (HIGH_VOLATILITY, NO_TRADE) wins even
+    # if the setup's own conditions happen to be met, per the decision
+    # hierarchy in master prompt section 38 (state outranks setup).
+    setups = detect_setups(structures, liquidity, direction, invalidation, EXECUTION_TIMEFRAME)
+    permitted = set(allowed_setup_names(final_state))
+    setups = [setup for setup in setups if setup.name in permitted]
 
     return ContextSnapshot(
         timestamp=timestamp.isoformat(),
@@ -179,11 +199,11 @@ def build_context(
             invalidations=[invalidation.detail],
         ),
         context_score=score,
-        market_state=MarketState.NO_TRADE if no_trade else market_state,
+        market_state=final_state,
+        previous_market_state=previous_state,
         preferred_direction=preferred,
-        # Reserved for the Setup Engine. Emitting a guess here would be
-        # exactly the "pattern -> order" shortcut the design forbids.
-        preferred_setups=[],
+        setups=setups,
+        preferred_setups=[setup.name.value for setup in setups],
         avoid=avoid,
         no_trade=no_trade,
         invalidation=invalidation,
@@ -346,7 +366,7 @@ def _risk_block(volatility, risk: dict = None) -> dict:
     }
 
 
-def _empty_snapshot(asset, as_of, quality, events, risk) -> ContextSnapshot:
+def _empty_snapshot(asset, as_of, quality, events, risk, previous_state=None) -> ContextSnapshot:
     """Snapshot for "there is nothing to analyze".
 
     Returned instead of None so a caller always gets the same shape and
@@ -409,7 +429,9 @@ def _empty_snapshot(asset, as_of, quality, events, risk) -> ContextSnapshot:
             biases={}, range_state=None, liquidity=None, volatility=None, events=events
         ),
         market_state=MarketState.NO_TRADE,
+        previous_market_state=previous_state,
         preferred_direction=Direction.NONE,
+        setups=[],
         preferred_setups=[],
         avoid=["no market data available"],
         no_trade=True,

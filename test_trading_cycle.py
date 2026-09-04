@@ -180,5 +180,195 @@ class RunTradingCycleTests(unittest.TestCase):
         self.assertEqual(result["action"], "buy")
 
 
+def make_history_df(n: int, start_price: float = 10000.0, step: float = 10.0) -> pd.DataFrame:
+    """A plausible-looking OHLCV history DataFrame, standing in for
+    what fetch_ohlcv_history would return. Its actual price shape
+    doesn't matter for the Setup Engine tests below — build_context()
+    itself is mocked there — it just has to be non-empty with a real
+    DatetimeIndex so build_timeframe_set() (not mocked) doesn't choke."""
+    rows = make_candles(n, start_price, step)
+    df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    return df.set_index("timestamp")
+
+
+class DummyContextExchange:
+    """Stands in for get_public_data_exchange()'s return value. Only
+    parse8601() is actually called on it in _run_setup_engine_cycle —
+    fetch_ohlcv_history itself is mocked in these tests, so nothing
+    else on this object is ever touched."""
+
+    def parse8601(self, iso_string):
+        return 0
+
+
+def make_snapshot(
+    *,
+    bias_direction=None,
+    no_trade=False,
+    market_state=None,
+    setups=None,
+    invalidation_level=9000.0,
+):
+    """A minimal but fully-populated ContextSnapshot for testing how
+    main.py reacts to it — real setup-detection correctness lives in
+    test_context_setups.py, real end-to-end context building in
+    test_context_engine.py. Defaults describe a clean bullish context."""
+    from context_engine.schema import (
+        Alignment,
+        Bias,
+        BiasHypothesis,
+        ContextScore,
+        ContextSnapshot,
+        DataQuality,
+        Direction,
+        Invalidation,
+        LiquidityState,
+        MarketState,
+        Phase,
+        Regime,
+        RegimeKind,
+        RangeState,
+        SessionState,
+        VolatilityRegime,
+        VolatilityState,
+        Zone,
+    )
+
+    bias_direction = bias_direction or Bias.BULLISH
+    market_state = market_state or MarketState.TREND_UP
+    setups = setups or []
+
+    return ContextSnapshot(
+        timestamp="2024-01-09T07:00:00+00:00",
+        asset=SYMBOL,
+        version="test",
+        data_quality=DataQuality(valid=True, degraded=False, issues=[]),
+        regime=Regime(primary=RegimeKind.TRENDING_UP, volatility=VolatilityRegime.NORMAL, phase=Phase.PULLBACK),
+        multi_timeframe={},
+        alignment=Alignment.STRONG_ALIGNMENT,
+        structure={},
+        liquidity=LiquidityState(),
+        volatility=VolatilityState(
+            atr=100.0, atr_percent=1.0, regime=VolatilityRegime.NORMAL, expansion=False, contraction=False, percentile=50.0
+        ),
+        range=RangeState(name="daily", high=12000.0, low=9000.0, position_percent=50.0, zone=Zone.EQUILIBRIUM),
+        sessions=SessionState(
+            current="LONDON", high=None, low=None, range=None, previous=None, previous_high=None, previous_low=None
+        ),
+        events=[],
+        bias=BiasHypothesis(direction=bias_direction, confidence=0.8, reasons=["test"], invalidations=["test"]),
+        context_score=ContextScore(total=5.0, label="BULLISH", weights_version="test", components=[]),
+        market_state=market_state,
+        previous_market_state=None,
+        preferred_direction=Direction.LONG if bias_direction in (Bias.BULLISH, Bias.STRONG_BULLISH) else Direction.NONE,
+        setups=setups,
+        preferred_setups=[s.name.value for s in setups],
+        avoid=[],
+        no_trade=no_trade,
+        invalidation=Invalidation(type="CLOSE_BELOW", level=invalidation_level, detail="test"),
+        risk={},
+    )
+
+
+class SetupEngineTradingCycleTests(unittest.TestCase):
+    """main.py's Setup Engine path (config.USE_SETUP_ENGINE=True).
+    Patches context_engine.engine.build_context directly rather than
+    feeding it real market data through the full pipeline — the
+    detector's own correctness is test_context_setups.py's job; this
+    is only about whether main.py reacts to a snapshot correctly."""
+
+    def _patches(self, snapshot):
+        return (
+            patch("main.USE_SETUP_ENGINE", True),
+            patch("data_fetcher.get_public_data_exchange", return_value=DummyContextExchange()),
+            patch("data_fetcher.fetch_ohlcv_history", return_value=make_history_df(200)),
+            patch("context_engine.engine.build_context", return_value=snapshot),
+        )
+
+    def test_buys_on_a_confirmed_long_setup_using_its_invalidation_as_stop(self):
+        from context_engine.schema import Direction, Invalidation, Setup, SetupName
+
+        setup = Setup(
+            name=SetupName.LIQUIDITY_SWEEP_RECLAIM,
+            direction=Direction.LONG,
+            reasons=["fake"],
+            invalidation=Invalidation(type="CLOSE_BELOW", level=9000.0, detail="fake"),
+        )
+        snapshot = make_snapshot(setups=[setup], invalidation_level=9000.0)
+        exchange = FakeExchange(make_candles(5, 10000, 0), free={"USDT": 1000.0})
+
+        p1, p2, p3, p4 = self._patches(snapshot)
+        with p1, p2, p3, p4:
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "buy")
+        stop_orders = [o for o in exchange.created_orders if o["side"] == "sell"]
+        self.assertEqual(len(stop_orders), 1)
+        self.assertEqual(stop_orders[0]["triggerPrice"], 9000.0)
+
+    def test_ignores_a_short_setup_long_only_bot(self):
+        from context_engine.schema import Direction, Invalidation, Setup, SetupName
+
+        short_setup = Setup(
+            name=SetupName.LIQUIDITY_SWEEP_RECLAIM,
+            direction=Direction.SHORT,
+            reasons=["fake"],
+            invalidation=Invalidation(type="CLOSE_ABOVE", level=11000.0, detail="fake"),
+        )
+        snapshot = make_snapshot(setups=[short_setup])
+        exchange = FakeExchange(make_candles(5, 10000, 0), free={"USDT": 1000.0})
+
+        p1, p2, p3, p4 = self._patches(snapshot)
+        with p1, p2, p3, p4:
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "hold")
+        self.assertEqual(exchange.created_orders, [])
+
+    def test_no_trade_context_closes_an_open_position(self):
+        from context_engine.schema import Bias
+
+        base = SYMBOL.split("/")[0]
+        stale_stop = {"id": "stop-1", "side": "sell", "amount": 1.0, "triggerPrice": 9000.0}
+        exchange = FakeExchange(make_candles(5, 10000, 0), locked={base: 1.0}, open_orders=[stale_stop])
+        snapshot = make_snapshot(bias_direction=Bias.NEUTRAL, no_trade=True)
+
+        p1, p2, p3, p4 = self._patches(snapshot)
+        with p1, p2, p3, p4:
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "sell")
+        self.assertEqual(exchange.cancelled_ids, ["stop-1"])
+
+    def test_bias_flip_closes_an_open_position_even_without_no_trade(self):
+        from context_engine.schema import Bias
+
+        base = SYMBOL.split("/")[0]
+        stale_stop = {"id": "stop-1", "side": "sell", "amount": 1.0, "triggerPrice": 9000.0}
+        exchange = FakeExchange(make_candles(5, 10000, 0), locked={base: 1.0}, open_orders=[stale_stop])
+        snapshot = make_snapshot(bias_direction=Bias.BEARISH, no_trade=False)
+
+        p1, p2, p3, p4 = self._patches(snapshot)
+        with p1, p2, p3, p4:
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "sell")
+
+    def test_self_heals_a_missing_stop_using_the_contexts_invalidation(self):
+        base = SYMBOL.split("/")[0]
+        exchange = FakeExchange(make_candles(5, 10000, 0), free={base: 1.0})  # in position, no open stop
+        snapshot = make_snapshot(invalidation_level=9200.0)
+
+        p1, p2, p3, p4 = self._patches(snapshot)
+        with p1, p2, p3, p4:
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "stop_loss_replaced")
+        stop_orders = [o for o in exchange.created_orders if o["side"] == "sell"]
+        self.assertEqual(len(stop_orders), 1)
+        self.assertEqual(stop_orders[0]["triggerPrice"], 9200.0)
+
+
 if __name__ == "__main__":
     unittest.main()

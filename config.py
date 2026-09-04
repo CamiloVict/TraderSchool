@@ -52,3 +52,21 @@ STOP_LOSS_LIMIT_SLIPPAGE_PCT = float(os.getenv("STOP_LOSS_LIMIT_SLIPPAGE_PCT", "
 # weak even as a confirmation signal, essentially nonexistent as a
 # stand-alone strategy).
 USE_PATTERN_FILTER = os.getenv("USE_PATTERN_FILTER", "false").strip().lower() == "true"
+
+# --- Setup Engine / Daily Market Context (see context_engine/) ------------
+# Opt-in, off by default: when True, main.py --trade replaces the EMA
+# crossover with context_engine's Setup Engine (currently just
+# LIQUIDITY_SWEEP_RECLAIM) as the only reason to enter — a bias, a
+# swept-and-reclaimed level, and a confirming break of structure all
+# have to agree, per the master prompt this responds to ("never treat
+# an isolated pattern as a sufficient signal"). Off by default because
+# it changes what actually places orders, and that has only been
+# exercised in this session's own tests — never against a live
+# Testnet feed. Turn it on deliberately once you've reviewed
+# context_engine/ yourself, not as a side effect of upgrading.
+USE_SETUP_ENGINE = os.getenv("USE_SETUP_ENGINE", "false").strip().lower() == "true"
+# Days of 1h history main.py --trade fetches to build multi-timeframe
+# context when USE_SETUP_ENGINE is on. Weekly structure needs ~60
+# weekly candles (context_engine's own README math): 540 days is ~77
+# weeks. Irrelevant, and not fetched, when USE_SETUP_ENGINE is False.
+CONTEXT_HISTORY_DAYS = int(os.getenv("CONTEXT_HISTORY_DAYS", "540"))

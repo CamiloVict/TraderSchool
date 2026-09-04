@@ -29,7 +29,7 @@ def take_profit_price(entry_price: float, side: str = "long") -> float:
     return entry_price * (1 - TAKE_PROFIT_PCT / 100)
 
 
-def position_size(capital: float, entry_price: float, side: str = "long") -> float:
+def position_size(capital: float, entry_price: float, side: str = "long", stop_price: float = None) -> float:
     """Position size (in base asset units, e.g. BTC) such that hitting
     the stop-loss loses exactly RISK_PER_TRADE_PCT of `capital`.
 
@@ -38,12 +38,19 @@ def position_size(capital: float, entry_price: float, side: str = "long") -> flo
     $10 / 0.02 = $500, so size = $500 / entry_price. Capped so the
     position never exceeds the available capital (relevant when
     STOP_LOSS_PCT is set very tight).
+
+    `stop_price`: an explicit stop level (e.g. a Setup Engine's
+    structural invalidation) to size against instead of the flat
+    STOP_LOSS_PCT distance below/above entry. Sizing is the only thing
+    this changes — placing the actual stop order is still the caller's
+    job, same as before.
     """
     if capital <= 0 or entry_price <= 0:
         return 0.0
 
     risk_amount = capital * (RISK_PER_TRADE_PCT / 100)
-    stop_price = stop_loss_price(entry_price, side)
+    if stop_price is None:
+        stop_price = stop_loss_price(entry_price, side)
     price_risk_pct = abs(entry_price - stop_price) / entry_price
     if price_risk_pct == 0:
         return 0.0

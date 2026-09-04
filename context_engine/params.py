@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 # Bumped whenever the meaning of a context field changes, so an old
 # snapshot is never silently compared against a new one.
-CONTEXT_ENGINE_VERSION = "0.1.0"
+CONTEXT_ENGINE_VERSION = "0.2.0"  # 0.2.0: preferred_setups is now populated (Setup Engine); market_state is transition-aware (state machine)
 # Bumped independently: re-weighting the score does not change what
 # the other fields mean, but it does invalidate score comparisons.
 WEIGHTS_VERSION = "0.1.0"

@@ -4,10 +4,9 @@ Two modes:
   1. `python main.py` (default) — Phase 1 connectivity check: proves
      ccxt can reach Binance Testnet, fetches recent OHLCV candles, and
      checks API-key auth if keys are set. Places no orders.
-  2. `python main.py --trade` — runs ONE trading cycle: fetches the
-     latest candles, computes the EMA-crossover signal, and if it
-     changed since the account's current position, places a single
-     Testnet market order sized by risk_manager.position_size().
+  2. `python main.py --trade` — runs ONE trading cycle and, if it
+     decides to act, places a single Testnet order sized by
+     risk_manager.position_size().
 
 --trade is designed to be invoked once per candle close (e.g. by cron
 or a systemd timer, hourly for the 1h timeframe) rather than run as an
@@ -19,21 +18,44 @@ fresh from the exchange every time (see executor.get_base_asset_balance).
 Every buy is immediately followed by a real STOP_LOSS_LIMIT sell order
 on the exchange (see executor.place_stop_loss_order), so a sharp move
 between hourly checks is capped without waiting for the next candle.
-The EMA-crossover exit still applies on top of that — whichever comes
-first closes the position. Known limitation, still flagged
-deliberately: no take-profit order is placed (risk_manager.take_profit_price()
-is computed but unused) — exits on a favorable move still wait for the
-EMA to cross back, not a fixed target.
+Known limitation, still flagged deliberately: no take-profit order is
+placed (risk_manager.take_profit_price() is computed but unused) —
+exits on a favorable move still wait for the exit condition below, not
+a fixed target.
 
-If config.USE_PATTERN_FILTER is on, a newly-confirmed bearish reversal
-pattern — double-top, head-and-shoulders, or triangle (see
-patterns.py) — blocks a new EMA-crossover entry. It's purely a veto on
-entries, never an extra exit trigger.
+Which signal decides entries depends on config.USE_SETUP_ENGINE
+(default False — see config.py for why it's opt-in):
+
+  - **False (default): EMA crossover**, in _run_ema_cycle(). Enters on
+    a bullish EMA 20/50 cross, exits on the cross back. If
+    config.USE_PATTERN_FILTER is also on, a newly-confirmed bearish
+    reversal pattern — double-top, head-and-shoulders, or triangle
+    (see patterns.py) — blocks a new entry. Purely a veto, never an
+    extra exit trigger.
+
+  - **True: Setup Engine**, in _run_setup_engine_cycle(). Replaces the
+    EMA signal with context_engine's LIQUIDITY_SWEEP_RECLAIM setup —
+    HTF bias, a swept-and-reclaimed level with displacement, and a
+    confirming break of structure all have to agree (master prompt:
+    "never treat an isolated pattern as a sufficient signal"). Exits
+    when the bias no longer supports the position or the context calls
+    no_trade. The stop-loss order is still placed exactly as before,
+    just priced off the setup's structural invalidation level instead
+    of a flat STOP_LOSS_PCT. Long-only, like the rest of this bot — a
+    SHORT setup is detected but never acted on.
 """
 import argparse
 import sys
 
-from config import BINANCE_API_KEY, SYMBOL, TIMEFRAME, USE_PATTERN_FILTER, USE_TESTNET
+from config import (
+    BINANCE_API_KEY,
+    CONTEXT_HISTORY_DAYS,
+    SYMBOL,
+    TIMEFRAME,
+    USE_PATTERN_FILTER,
+    USE_SETUP_ENGINE,
+    USE_TESTNET,
+)
 from data_fetcher import fetch_ohlcv, get_exchange
 from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
 from strategy import SLOW_PERIOD, add_signals
@@ -75,7 +97,17 @@ def check_connection() -> None:
 def run_trading_cycle(exchange=None) -> dict:
     """Fetch the latest signal and, if it differs from the account's
     current position, place a single Testnet order. Returns a dict
-    describing what happened, and also prints it."""
+    describing what happened, and also prints it. Dispatches to the
+    EMA or Setup Engine cycle per config.USE_SETUP_ENGINE (see the
+    module docstring)."""
+    exchange = exchange or get_exchange()
+    if USE_SETUP_ENGINE:
+        return _run_setup_engine_cycle(exchange)
+    return _run_ema_cycle(exchange)
+
+
+def _run_ema_cycle(exchange) -> dict:
+    """EMA-crossover trading cycle — see the module docstring."""
     from executor import (
         cancel_order,
         get_average_fill_price,
@@ -89,7 +121,6 @@ def run_trading_cycle(exchange=None) -> dict:
     )
     from risk_manager import position_size, stop_loss_price
 
-    exchange = exchange or get_exchange()
     df = fetch_ohlcv(exchange, symbol=SYMBOL, timeframe=TIMEFRAME, limit=SLOW_PERIOD * 3)
     data = add_signals(df)
     latest = data.iloc[-1]
@@ -152,6 +183,121 @@ def run_trading_cycle(exchange=None) -> dict:
         "timestamp": str(latest.name),
         "price": price,
         "signal": signal,
+        "in_position_before": in_position,
+        "action": action,
+        "order_id": order.get("id") if order else None,
+        "stop_order_id": stop_order.get("id") if stop_order else None,
+    }
+    print(result)
+    return result
+
+
+def _run_setup_engine_cycle(exchange) -> dict:
+    """Setup Engine trading cycle — see the module docstring.
+
+    Order execution still only ever uses Testnet (`exchange`, passed
+    in), but building context needs far more history than Testnet
+    retains, so — exactly like backtester.py and context_engine's own
+    CLI — the *context* is built from real Binance's public market
+    data via get_public_data_exchange(). Same split as everywhere else
+    in this repo: real data to see the market, Testnet to touch it.
+    """
+    import pandas as pd
+
+    from context_engine.engine import build_context
+    from context_engine.schema import Bias, Direction
+    from context_engine.timeframes import build_timeframe_set
+    from data_fetcher import fetch_ohlcv_history, get_public_data_exchange
+    from executor import (
+        cancel_order,
+        get_average_fill_price,
+        get_base_asset_balance,
+        get_open_stop_loss_orders,
+        get_quote_asset_balance,
+        get_total_base_asset_balance,
+        place_market_order,
+        place_stop_loss_order,
+    )
+    from risk_manager import position_size, stop_loss_price
+
+    context_exchange = get_public_data_exchange()
+    since_ms = context_exchange.parse8601(
+        (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=CONTEXT_HISTORY_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    history = fetch_ohlcv_history(context_exchange, symbol=SYMBOL, timeframe=TIMEFRAME, since_ms=since_ms)
+    frames = build_timeframe_set(history, base_timeframe=TIMEFRAME)
+
+    execution = frames.get(TIMEFRAME)
+    if execution is None or execution.empty:
+        result = {
+            "timestamp": None,
+            "price": None,
+            "action": "no_data",
+            "in_position_before": None,
+            "order_id": None,
+            "stop_order_id": None,
+        }
+        print(result)
+        return result
+
+    # Stateless by design (matching the rest of this bot): rather than
+    # persist market_state to disk between cron runs, rebuild it fresh
+    # by asking what it was as of the *previous* candle, then thread
+    # that into building it as of now. build_context() itself never
+    # remembers anything between calls.
+    previous_state = None
+    if len(execution) >= 2:
+        previous_state = build_context(frames, asset=SYMBOL, as_of=execution.index[-2]).market_state
+
+    context = build_context(frames, asset=SYMBOL, previous_state=previous_state)
+    price = float(execution["close"].iloc[-1])
+
+    total_balance = get_total_base_asset_balance(exchange, SYMBOL)
+    in_position = total_balance * price > 10
+
+    long_setup = next((s for s in context.setups if s.direction == Direction.LONG), None)
+    bullish_bias = context.bias.direction in (Bias.BULLISH, Bias.STRONG_BULLISH)
+
+    action = "hold"
+    order = None
+    stop_order = None
+
+    if long_setup is not None and not in_position and not context.no_trade:
+        quote_balance = get_quote_asset_balance(exchange, SYMBOL)
+        stop_reference = long_setup.invalidation.level
+        if stop_reference is None or stop_reference >= price:
+            stop_reference = stop_loss_price(price)  # degenerate level: fall back to the flat %
+        size = position_size(quote_balance, price, stop_price=stop_reference)
+        if size > 0:
+            order = place_market_order(exchange, SYMBOL, "buy", size)
+            action = "buy"
+            filled_amount = float(order.get("filled") or size)
+            stop_order = place_stop_loss_order(exchange, SYMBOL, filled_amount, stop_reference)
+    elif in_position and (context.no_trade or not bullish_bias):
+        # The bias that justified this position is gone, or context
+        # says not to trade at all right now — cancel the protective
+        # stop first so it doesn't compete with this market sell for
+        # the same (currently locked) balance.
+        for stale_order in get_open_stop_loss_orders(exchange, SYMBOL):
+            cancel_order(exchange, SYMBOL, stale_order["id"])
+        free_balance = get_base_asset_balance(exchange, SYMBOL)
+        order = place_market_order(exchange, SYMBOL, "sell", free_balance)
+        action = "sell"
+    elif in_position and not get_open_stop_loss_orders(exchange, SYMBOL):
+        # Self-heal, same idea as the EMA cycle: reconstruct a missing
+        # stop from the current context's invalidation level rather
+        # than leaving the position unprotected.
+        stop_reference = context.invalidation.level
+        if stop_reference is None or stop_reference >= price:
+            stop_reference = stop_loss_price(price)
+        stop_order = place_stop_loss_order(exchange, SYMBOL, total_balance, stop_reference)
+        action = "stop_loss_replaced"
+
+    result = {
+        "timestamp": str(execution.index[-1]),
+        "price": price,
+        "market_state": context.market_state.value,
+        "bias": context.bias.direction.value,
         "in_position_before": in_position,
         "action": action,
         "order_id": order.get("id") if order else None,

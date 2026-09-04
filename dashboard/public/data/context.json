@@ -1,11 +1,18 @@
 {
   "timestamp": "2026-09-04T21:00:00+00:00",
   "asset": "BTC/USDT",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "data_quality": {
     "valid": true,
-    "degraded": false,
-    "issues": []
+    "degraded": true,
+    "issues": [
+      {
+        "code": "SHORT_HISTORY",
+        "severity": "WARNING",
+        "timeframe": "1w",
+        "detail": "only 53 candles (want >= 60)"
+      }
+    ]
   },
   "regime": {
     "primary": "TRANSITION",
@@ -287,7 +294,7 @@
       77655.882,
       78682.0,
       79380.595,
-      79492.11,
+      79493.305,
       79643.065,
       80600.14,
       80866.898,
@@ -297,8 +304,8 @@
     "recent_event": null
   },
   "volatility": {
-    "atr": 506.61003583,
-    "atr_percent": 0.637,
+    "atr": 506.43932154,
+    "atr_percent": 0.6369,
     "regime": "HIGH",
     "expansion": false,
     "contraction": false,
@@ -308,7 +315,7 @@
     "name": "daily",
     "high": 82300.0,
     "low": 76264.0,
-    "position_percent": 54.17,
+    "position_percent": 53.85,
     "zone": "EQUILIBRIUM"
   },
   "sessions": {
@@ -359,7 +366,9 @@
     ]
   },
   "market_state": "NO_TRADE",
+  "previous_market_state": null,
   "preferred_direction": "NONE",
+  "setups": [],
   "preferred_setups": [],
   "avoid": [
     "higher timeframes conflict",

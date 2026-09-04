@@ -182,7 +182,9 @@ red ni el disco:
 | `ranges.py` | Premium/equilibrio/descuento, siempre con el rango nombrado |
 | `sessions.py` | Asia/Londres/Nueva York en ventanas UTC |
 | `bias.py` | Bias por timeframe desde estructura + alineación entre timeframes |
-| `regime.py` | Régimen y clasificador de `market_state` |
+| `regime.py` | Régimen y clasificador de `market_state` (sin memoria — ver `state_machine.py`) |
+| `state_machine.py` | Transiciones acotadas entre estados y registro de qué setups permite/prohíbe cada uno |
+| `setups.py` | Setup Engine: hoy solo `LIQUIDITY_SWEEP_RECLAIM` |
 | `scoring.py` | Score ponderado y versionado, con el desglose de cada componente |
 | `engine.py` | Orquestador: arma el `ContextSnapshot`, las condiciones de no-trade y la invalidación |
 | `llm_interface.py` | Solo el contrato JSON de entrada/salida, sin proveedor |
@@ -252,6 +254,60 @@ Dos campos que conviene leer con atención:
   contexto no calcula tamaño de posición ni puede ensanchar un límite;
   eso sigue siendo territorio de `risk_manager.py`.
 
+### Setup Engine y Market State Machine
+
+`preferred_setups` ya no sale siempre vacío. `setups.py` implementa el
+primer (y único, por ahora) setup del master prompt:
+**`LIQUIDITY_SWEEP_RECLAIM`** — bias HTF direccional + un nivel de
+liquidez barrido que se recuperó con desplazamiento + una ruptura de
+estructura (BOS) en el timeframe de ejecución que confirma en la misma
+dirección. Las cuatro condiciones tienen que darse juntas; ninguna por
+sí sola alcanza ("nunca trates un patrón aislado como señal
+suficiente", regla principal del master prompt).
+
+`state_machine.py` construye la máquina de estados de la sección 15:
+`classify_state()` sigue siendo un clasificador sin memoria (mira la
+vela actual, no sabe qué pasó antes), y `next_state(previous_state,
+classified_state)` es quien decide si ese cambio es válido — una
+tabla de transiciones de un solo salto (ej. `TREND_UP` puede pasar a
+`PULLBACK` o `REVERSAL_ATTEMPT`, pero no directo a `TREND_DOWN`) más
+un escape inmediato para entrar/salir de `HIGH_VOLATILITY`/`NO_TRADE`
+(el riesgo pisa por encima del estado, sección 38). Cada estado
+también declara en `STATE_DEFINITIONS` qué setups permite — un setup
+que se cumple mientras el estado es `NO_TRADE` igual no aparece en el
+snapshot.
+
+**`build_context()` sigue siendo puro** (no persiste nada): quien
+llama es responsable de pasarle `previous_state` si quiere que la
+máquina de estados tenga memoria. `main.py` lo resuelve reconstruyendo
+el contexto también `as_of` la vela anterior en vez de guardar un
+archivo de estado, para no romper el "sin estado local" del resto del
+bot.
+
+**Conectado a `main.py --trade`** vía `USE_SETUP_ENGINE=true` (`false`
+por defecto). Con el flag activo, la entrada deja de depender del
+cruce de EMA — la única razón para comprar es un setup `LONG`
+confirmado — y el stop-loss se ubica en el nivel de invalidación
+estructural del setup en vez del `STOP_LOSS_PCT` fijo. La salida (sin
+tocar el stop-loss real, que sigue igual) ocurre cuando el bias deja de
+ser alcista o el contexto pasa a `no_trade`. Apagado por defecto:
+cambia qué coloca las órdenes, y solo se probó contra los tests de este
+repo — nunca contra un feed de Testnet en vivo. Como necesita
+estructura semanal, el ciclo pasa a pedir `CONTEXT_HISTORY_DAYS` (540
+por defecto) de historial **real** de Binance para construir el
+contexto — mismo split que ya usa el backtest: datos reales para ver
+el mercado, Testnet solo para ejecutar.
+
+**Pendiente, señalado a propósito — backtesting de esto todavía no
+existe.** `build_context()` reconstruye los timeframes altos desde
+cero en cada llamada; correrlo por cada vela de un backtest de un año
+sería reconstruir un año de estructura semanal/diaria miles de veces.
+No lo apuré para no meter una implementación lenta o, peor, una que
+recorte esquinas de look-ahead para que ande rápido. Antes de
+respaldar `USE_SETUP_ENGINE=true` con un backtest histórico hace falta
+decidir cómo construir el contexto de forma incremental (o aceptar que
+sea lento y acotarlo a una ventana corta primero).
+
 ### Versionado
 
 Dos versiones separadas, porque cambian por motivos distintos:
@@ -291,10 +347,11 @@ en serio necesita walk-forward, que todavía no existe.
 
 ```bash
 python -m unittest test_context_validation test_context_structure \
-                   test_context_liquidity test_context_engine -v
+                   test_context_liquidity test_context_engine \
+                   test_context_setups test_context_state_machine -v
 ```
 
-O toda la suite del repo (93 tests) con `python -m unittest discover`.
+O toda la suite del repo (133 tests) con `python -m unittest discover`.
 
 ## Dashboard (React)
 
@@ -362,13 +419,15 @@ del dashboard.
 - [x] Estructura del proyecto
 - [x] `data_fetcher.py`: conexión vía ccxt en modo sandbox + histórico OHLCV
 - [x] `main.py`: verificación de conexión (`python main.py`) y ciclo de
-  trading en testnet (`python main.py --trade`)
+  trading en testnet (`python main.py --trade`) — por EMA (default) o
+  por Setup Engine (`USE_SETUP_ENGINE=true`)
 - [x] `strategy.py`: cruce de EMA 20/50, long-only
 - [x] `backtester.py`: simulación (con el mismo stop-loss real que usa
   `main.py --trade`) + métricas (retorno vs. buy & hold, win rate,
   drawdown, comisiones, duración de operaciones) y exportación a JSON
   para el dashboard (`--export`)
-- [x] `risk_manager.py`: tamaño de posición por % de riesgo, precios de
+- [x] `risk_manager.py`: tamaño de posición por % de riesgo (con stop
+  fijo o un `stop_price` estructural explícito), precios de
   stop-loss/take-profit, límite de pérdida diaria (`DailyLossTracker`)
 - [x] `executor.py`: órdenes de mercado y stop-loss real
   (`STOP_LOSS_LIMIT`) en Testnet, bloqueadas si `USE_TESTNET` es `False`
@@ -399,9 +458,17 @@ del dashboard.
   (validación de datos, estructura, liquidez, volatilidad, sesiones,
   rango, bias multi-timeframe, régimen y score versionado), con CLI
   `python -m context_engine --export ...` y panel en el dashboard
-- [x] `test_context_*.py`: 80 tests del motor de contexto, incluido el de
+- [x] `context_engine/state_machine.py` + `setups.py`: transiciones de
+  estado acotadas y el primer Setup Engine (`LIQUIDITY_SWEEP_RECLAIM`),
+  conectados a `preferred_setups`/`setups` del snapshot y, opt-in, al
+  ciclo de trading real en `main.py`
+- [x] `test_context_*.py`: 103 tests del motor de contexto (validación,
+  estructura, liquidez, engine, setups, state machine), incluido el de
   look-ahead (el contexto en el momento `t` tiene que dar idéntico con o
   sin las velas posteriores a `t` en la entrada)
+- [x] `test_risk_manager.py`: tests del `stop_price` explícito en
+  `position_size()` (sizing correcto con un stop más ancho/angosto que
+  el fijo, división por cero evitada, funciona también en `short`)
 
 ## Decisiones tomadas hasta ahora
 
