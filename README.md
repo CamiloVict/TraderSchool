@@ -8,11 +8,16 @@ y validada.
 ## Setup
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 ```
+
+`python3` es necesario solo para crear el entorno virtual. Una vez que lo
+activás con `source .venv/bin/activate`, el comando `python` (sin el 3)
+ya funciona correctamente dentro de esa terminal — es al que se refieren
+el resto de los comandos de este README.
 
 1. Entra a https://testnet.binance.vision/, loguéate con GitHub y genera
    una API key (HMAC_SHA256).
