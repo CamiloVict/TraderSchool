@@ -40,3 +40,14 @@ MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
 # sits, so the order still fills during a fast drop instead of resting
 # unfilled above the market once triggered.
 STOP_LOSS_LIMIT_SLIPPAGE_PCT = float(os.getenv("STOP_LOSS_LIMIT_SLIPPAGE_PCT", "0.5"))
+
+# --- Chart-pattern confirmation filter (see patterns.py) -------------------
+# Opt-in, off by default: when True, a newly-confirmed bearish
+# double-top blocks new EMA-crossover entries for a while. Purely a
+# veto on entries — never forces an exit, never generates its own
+# trades. See the analysis in the session that added this for why it's
+# scoped this narrowly (chart patterns are backward-looking pattern
+# matching, same family as the EMA crossover, not a "predictive"
+# model — the evidence for them is weak even as a confirmation signal,
+# essentially nonexistent as a stand-alone strategy).
+USE_PATTERN_FILTER = os.getenv("USE_PATTERN_FILTER", "false").strip().lower() == "true"

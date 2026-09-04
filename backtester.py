@@ -19,6 +19,10 @@ Assumptions (deliberate simplifications, worth knowing about):
     take-profit is simulated, matching main.py --trade today.
   - A flat per-trade fee approximates Binance's spot taker fee so the
     backtest isn't unrealistically optimistic.
+  - `use_pattern_filter=True` (or CLI `--pattern-filter`) turns on the
+    double-top/double-bottom confirmation filter from patterns.py: a
+    confirmed double-top blocks a new EMA-crossover entry for a while.
+    Off by default — it's an opt-in experiment, not a validated edge.
 """
 import json
 from datetime import datetime, timezone
@@ -27,14 +31,26 @@ import numpy as np
 import pandas as pd
 
 from config import RISK_PER_TRADE_PCT, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_double_patterns
 from risk_manager import stop_loss_price
 from strategy import FAST_PERIOD, SLOW_PERIOD, add_signals
 
 TAKER_FEE_PCT = 0.1  # Binance default spot taker fee, %
 
 
-def _simulate(df: pd.DataFrame, initial_capital: float, fast: int = None, slow: int = None):
+def _simulate(
+    df: pd.DataFrame,
+    initial_capital: float,
+    fast: int = None,
+    slow: int = None,
+    use_pattern_filter: bool = False,
+):
     """Core simulation loop, shared by run_backtest() and export_report().
+
+    `use_pattern_filter`: opt-in double-top/double-bottom confirmation
+    filter (see patterns.py) — a confirmed double-top blocks new
+    EMA-crossover entries for PATTERN_VETO_LOOKBACK candles. It only
+    gates entries; exits (signal or stop-loss) are unaffected.
 
     Returns (metrics: dict, data: DataFrame with equity/drawdown columns
     added, trades: list of per-trade dicts).
@@ -48,6 +64,13 @@ def _simulate(df: pd.DataFrame, initial_capital: float, fast: int = None, slow: 
 
     warmup = slow if slow is not None else SLOW_PERIOD
     data = data.iloc[warmup:].copy()
+
+    if use_pattern_filter:
+        data["pattern_signal"] = detect_double_patterns(data)
+        entry_blocked = bearish_veto_mask(data["pattern_signal"], PATTERN_VETO_LOOKBACK)
+    else:
+        data["pattern_signal"] = 0
+        entry_blocked = pd.Series(False, index=data.index)
 
     capital = initial_capital
     position = 0  # 0 = flat, 1 = long
@@ -85,7 +108,7 @@ def _simulate(df: pd.DataFrame, initial_capital: float, fast: int = None, slow: 
             )
             position = 0
             stop_price = None
-        elif position == 0 and signal == 1:
+        elif position == 0 and signal == 1 and not entry_blocked.loc[timestamp]:
             position = 1
             entry_price = price
             entry_time = timestamp
@@ -169,13 +192,14 @@ def run_backtest(
     initial_capital: float = 1000.0,
     fast: int = None,
     slow: int = None,
+    use_pattern_filter: bool = False,
 ) -> dict:
     """Simulate the EMA-crossover strategy over `df` and return metrics.
 
     `df` must have a 'close' column indexed by time (as returned by
     data_fetcher.fetch_ohlcv / fetch_ohlcv_history).
     """
-    metrics, _, _ = _simulate(df, initial_capital, fast, slow)
+    metrics, _, _ = _simulate(df, initial_capital, fast, slow, use_pattern_filter)
     return metrics
 
 
@@ -188,12 +212,13 @@ def export_report(
     symbol: str = None,
     timeframe: str = None,
     is_demo: bool = False,
+    use_pattern_filter: bool = False,
 ) -> dict:
     """Run the backtest and write a JSON report the React dashboard reads:
     metrics, per-candle OHLC/EMA/signal/equity, and the trade list.
     Returns the same dict that's written to disk.
     """
-    metrics, data, trades = _simulate(df, initial_capital, fast, slow)
+    metrics, data, trades = _simulate(df, initial_capital, fast, slow, use_pattern_filter)
 
     candles = [
         {
@@ -205,6 +230,7 @@ def export_report(
             "ema_fast": float(row["ema_fast"]),
             "ema_slow": float(row["ema_slow"]),
             "signal": int(row["signal"]),
+            "pattern_signal": int(row["pattern_signal"]),
             "equity": float(row["equity"]),
             "drawdown_pct": float(row["drawdown_pct"]),
         }
@@ -227,6 +253,8 @@ def export_report(
             "long_only": True,
             "single_position": True,
             "take_profit_simulated": False,
+            "pattern_filter_enabled": use_pattern_filter,
+            "pattern_veto_lookback_candles": PATTERN_VETO_LOOKBACK if use_pattern_filter else None,
         },
         "metrics": metrics,
         "candles": candles,
@@ -275,6 +303,15 @@ if __name__ == "__main__":
             "order execution (main.py --trade) still only ever uses Testnet."
         ),
     )
+    parser.add_argument(
+        "--pattern-filter",
+        action="store_true",
+        help=(
+            "Opt-in double-top/double-bottom confirmation filter (see patterns.py): "
+            "blocks a new EMA-crossover entry for a while after a bearish double-top "
+            "confirms. Off by default."
+        ),
+    )
     args = parser.parse_args()
 
     exchange = get_public_data_exchange() if args.source == "real" else get_exchange()
@@ -286,11 +323,17 @@ if __name__ == "__main__":
     print(f"Got {len(history)} candles: {history.index.min()} -> {history.index.max()}\n")
 
     if args.export:
-        report = export_report(history, args.export, symbol=SYMBOL, timeframe=TIMEFRAME)
+        report = export_report(
+            history,
+            args.export,
+            symbol=SYMBOL,
+            timeframe=TIMEFRAME,
+            use_pattern_filter=args.pattern_filter,
+        )
         metrics = report["metrics"]
         print(f"Report written to {args.export}")
     else:
-        metrics = run_backtest(history)
+        metrics = run_backtest(history, use_pattern_filter=args.pattern_filter)
 
     for key, value in metrics.items():
         print(f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}")

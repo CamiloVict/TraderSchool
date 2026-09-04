@@ -7,6 +7,7 @@ executor.py without touching Testnet. Run with:
     python -m unittest test_trading_cycle -v
 """
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -154,6 +155,29 @@ class RunTradingCycleTests(unittest.TestCase):
         self.assertEqual(len(stop_orders), 1)
         expected_stop = risk_manager.stop_loss_price(10500.0)
         self.assertAlmostEqual(stop_orders[0]["triggerPrice"], expected_stop, places=6)
+
+    def test_pattern_filter_blocks_entry_when_enabled_and_bearish(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        always_bearish = lambda data, *a, **k: pd.Series(-1, index=data.index)
+        with patch("main.USE_PATTERN_FILTER", True), patch(
+            "main.detect_double_patterns", side_effect=always_bearish
+        ):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_blocked_by_pattern")
+        self.assertEqual(exchange.created_orders, [])
+
+    def test_pattern_filter_off_ignores_pattern_detection(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        with patch("main.USE_PATTERN_FILTER", False), patch("main.detect_double_patterns") as mock_detect:
+            result = main.run_trading_cycle(exchange)
+
+        mock_detect.assert_not_called()
+        self.assertEqual(result["action"], "buy")
 
 
 if __name__ == "__main__":

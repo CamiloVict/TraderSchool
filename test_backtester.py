@@ -7,9 +7,11 @@ price or the EMA crossing back. Run with:
     python -m unittest test_backtester -v
 """
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
+import backtester
 from backtester import _simulate
 from risk_manager import stop_loss_price
 from strategy import SLOW_PERIOD
@@ -63,6 +65,36 @@ class SimulateStopLossTests(unittest.TestCase):
         self.assertGreaterEqual(len(trades), 1)
         self.assertTrue(all(t["exit_reason"] == "signal" for t in trades))
         self.assertEqual(metrics["stop_loss_exits"], 0)
+
+
+class PatternFilterWiringTests(unittest.TestCase):
+    """Verifies _simulate() actually wires the pattern veto into the
+    entry check. patterns.py's own detection logic is covered by
+    test_patterns.py — here detect_double_patterns is stubbed so the
+    test is only about whether _simulate() honors it."""
+
+    def test_confirmed_double_top_blocks_every_entry(self):
+        warmup = [100.0] * (SLOW_PERIOD + 5)
+        rise = [100.0 + i for i in range(1, 31)]  # would trigger an EMA entry
+        df = make_df(warmup + rise)
+
+        always_bearish = lambda data, *a, **k: pd.Series(-1, index=data.index)
+        with patch("backtester.detect_double_patterns", side_effect=always_bearish):
+            _, data, trades = backtester._simulate(df, initial_capital=1000.0, use_pattern_filter=True)
+
+        self.assertEqual(trades, [])
+        self.assertTrue((data["equity"] == 1000.0).all())
+
+    def test_filter_off_ignores_pattern_detection_entirely(self):
+        warmup = [100.0] * (SLOW_PERIOD + 5)
+        rise = [100.0 + i for i in range(1, 31)]
+        df = make_df(warmup + rise)
+
+        with patch("backtester.detect_double_patterns") as mock_detect:
+            _, data, _ = backtester._simulate(df, initial_capital=1000.0, use_pattern_filter=False)
+
+        mock_detect.assert_not_called()
+        self.assertTrue((data["equity"] != 1000.0).any())  # entry happened normally
 
 
 if __name__ == "__main__":

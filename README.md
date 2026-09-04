@@ -79,6 +79,37 @@ de dejar la posición desprotegida hasta el próximo cruce.
 **Nunca coloca órdenes si `BINANCE_TESTNET` no es `true`** — `executor.py`
 lo verifica antes de cada orden y lanza `LiveTradingDisabledError` si no.
 
+## Filtro de patrones de chart (`patterns.py`, opt-in)
+
+```bash
+python backtester.py --source real --days 365 --pattern-filter
+```
+
+Detecta patrones clásicos de doble techo / doble piso (dos picos o
+valles a precio similar, separados por un retroceso significativo, con
+ruptura confirmada del nivel intermedio) y los usa como **veto sobre
+las entradas** de la EMA: un doble techo confirmado bloquea una nueva
+entrada por `PATTERN_VETO_LOOKBACK` velas, aunque la EMA acabe de
+cruzar hacia arriba. No genera operaciones propias, no toca las
+salidas (esas siguen siendo el cruce de EMA o el stop-loss) — es
+puramente un filtro de confirmación, apagado por defecto
+(`USE_PATTERN_FILTER=false` en `.env`).
+
+**Por qué está limitado a esto y no a "modelos predictivos":** los
+patrones de chart (hombro-cabeza-hombro, doble techo, triángulos,
+etc.) son reconocimiento de patrones sobre precio *pasado* — la misma
+familia que el cruce de EMA, solo que geométrico en vez de basado en
+medias. La evidencia académica (Lo-Mamaysky-Wang 2000,
+Savin-Weller-Zvingelis 2007) los respalda como señal de confirmación
+en velas diarias, "poco o nada" como estrategia autónoma, y varios
+estudios en velas de 1 minuto que sí parecían prometedores (Miller et
+al. 2019, Corbet et al. 2019) resultan no rentables en cuanto se
+descuentan comisiones reales (Resta et al. 2020, Frömmel & Deprez
+2024). Por eso: patrón como veto sobre una entrada ya validada por
+EMA, no como estrategia propia — y solo doble techo/piso por ahora,
+el patrón más simple de detectar de forma confiable. H&S y triángulos
+quedan para después si este primer paso resulta útil en el backtest.
+
 ## Dashboard (React)
 
 ```bash
@@ -152,13 +183,18 @@ hasta que corras tus propios backtests.
 - [x] `dashboard/`: panel React (Vite) con gráfico de velas real
   (lightweight-charts), selector de reportes (multi-símbolo) y panel
   explicativo de la estrategia
+- [x] `patterns.py`: filtro de confirmación por doble techo/piso sobre
+  las entradas de EMA, opt-in (`USE_PATTERN_FILTER` / `--pattern-filter`)
 - [x] `test_trading_cycle.py`: tests offline (sin red) del ciclo de
   trading contra un exchange falso — compra + coloca stop, cancela el
-  stop antes de vender por señal, reconstruye un stop faltante.
-- [x] `test_backtester.py`: tests de la simulación del stop-loss en el
-  backtest (sale por stop aunque la señal siga alcista; sale por señal
-  si el stop nunca se toca). Correr ambos con
-  `python -m unittest test_trading_cycle test_backtester -v`
+  stop antes de vender por señal, reconstruye un stop faltante, filtro
+  de patrones bloquea/permite la entrada según corresponda.
+- [x] `test_backtester.py`: tests de la simulación del stop-loss (sale
+  por stop aunque la señal siga alcista; sale por señal si el stop
+  nunca se toca) y del cableado del filtro de patrones.
+- [x] `test_patterns.py`: tests de la detección de doble techo/piso y
+  del veto temporal sobre entradas. Correr los tres con
+  `python -m unittest test_trading_cycle test_backtester test_patterns -v`
 
 ## Decisiones tomadas hasta ahora
 

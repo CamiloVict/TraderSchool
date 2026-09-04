@@ -24,12 +24,17 @@ first closes the position. Known limitation, still flagged
 deliberately: no take-profit order is placed (risk_manager.take_profit_price()
 is computed but unused) — exits on a favorable move still wait for the
 EMA to cross back, not a fixed target.
+
+If config.USE_PATTERN_FILTER is on, a newly-confirmed bearish
+double-top (see patterns.py) blocks a new EMA-crossover entry — it's
+purely a veto on entries, never an extra exit trigger.
 """
 import argparse
 import sys
 
-from config import BINANCE_API_KEY, SYMBOL, TIMEFRAME, USE_TESTNET
+from config import BINANCE_API_KEY, SYMBOL, TIMEFRAME, USE_PATTERN_FILTER, USE_TESTNET
 from data_fetcher import fetch_ohlcv, get_exchange
+from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_double_patterns
 from strategy import SLOW_PERIOD, add_signals
 
 
@@ -102,7 +107,14 @@ def run_trading_cycle(exchange=None) -> dict:
     order = None
     stop_order = None
 
-    if signal == 1 and not in_position:
+    entry_blocked_by_pattern = False
+    if USE_PATTERN_FILTER and signal == 1 and not in_position:
+        pattern_signal = detect_double_patterns(data)
+        entry_blocked_by_pattern = bool(
+            bearish_veto_mask(pattern_signal, PATTERN_VETO_LOOKBACK).iloc[-1]
+        )
+
+    if signal == 1 and not in_position and not entry_blocked_by_pattern:
         quote_balance = get_quote_asset_balance(exchange, SYMBOL)
         size = position_size(quote_balance, price)
         if size > 0:
@@ -113,6 +125,8 @@ def run_trading_cycle(exchange=None) -> dict:
             stop_order = place_stop_loss_order(
                 exchange, SYMBOL, filled_amount, stop_loss_price(entry_price)
             )
+    elif signal == 1 and not in_position and entry_blocked_by_pattern:
+        action = "entry_blocked_by_pattern"
     elif signal == 0 and in_position:
         # Cancel the protective stop first so it doesn't compete with
         # this market sell for the same (currently locked) balance.
