@@ -24,7 +24,8 @@ BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 USE_TESTNET = os.getenv("BINANCE_TESTNET", "true").strip().lower() == "true"
 
 # --- Market ------------------------------------------------------------
-SYMBOL = os.getenv("SYMBOL", "BTC/USDT")
+# PAXG/USDT (oro) is the default focus of this bot; override via .env for BTC/USDT etc.
+SYMBOL = os.getenv("SYMBOL", "PAXG/USDT")
 TIMEFRAME = os.getenv("TIMEFRAME", "1h")
 
 # --- Risk management (not used until risk_manager.py is implemented) ------

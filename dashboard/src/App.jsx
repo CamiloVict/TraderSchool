@@ -14,7 +14,7 @@ const DATA_DIR = "/data";
 const REPORTS_MANIFEST_URL = `${DATA_DIR}/reports.json`;
 // Falls back to this single entry if reports.json is missing, so a
 // dashboard set up before the manifest existed still works.
-const DEFAULT_REPORTS = [{ label: "Backtest", file: "backtest.json" }];
+const DEFAULT_REPORTS = [{ label: "Backtest", file: "backtest.json", context: "context.json" }];
 
 export default function App() {
   const [reports, setReports] = useState(DEFAULT_REPORTS);
@@ -23,15 +23,22 @@ export default function App() {
   const [context, setContext] = useState(null);
   const [error, setError] = useState(null);
 
+  const selectedContextFile = reports.find((r) => r.file === selectedFile)?.context;
+
   // The market context is optional and independent of the backtest, so
-  // a missing file resolves to null and the panel explains how to
-  // generate it rather than breaking the dashboard.
+  // a missing file (or a report entry with no `context` at all) resolves
+  // to null and the panel explains how to generate it rather than
+  // breaking the dashboard. Re-fetches whenever the selected report
+  // changes, so switching symbols (e.g. PAXG <-> BTC) shows that
+  // symbol's own context instead of whatever loaded first.
   useEffect(() => {
-    fetch(`${DATA_DIR}/context.json`)
+    setContext(null);
+    if (!selectedContextFile) return;
+    fetch(`${DATA_DIR}/${selectedContextFile}`)
       .then((res) => (res.ok ? res.json() : null))
       .catch(() => null)
       .then(setContext);
-  }, []);
+  }, [selectedContextFile]);
 
   useEffect(() => {
     fetch(REPORTS_MANIFEST_URL)

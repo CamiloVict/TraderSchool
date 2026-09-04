@@ -1,9 +1,11 @@
 # trading-bot
 
-Bot de trading para BTC/USDT (1h) sobre Binance, desarrollado y probado
-primero contra **Binance Spot Testnet** (https://testnet.binance.vision/).
-Ninguna orden real se ejecuta hasta que la estrategia esté backtesteada
-y validada.
+Bot de trading (1h) sobre Binance, desarrollado y probado primero contra
+**Binance Spot Testnet** (https://testnet.binance.vision/). El símbolo
+por default es **PAXG/USDT** (oro) — el activo de mayor interés — pero
+cualquier par soportado por Binance funciona seteando `SYMBOL` en `.env`
+(por ejemplo `SYMBOL=BTC/USDT`). Ninguna orden real se ejecuta hasta que
+la estrategia esté backtesteada y validada.
 
 ## Setup
 
@@ -37,7 +39,8 @@ python main.py
 ```
 
 Deberías ver la lista de mercados cargada, las últimas 10 velas de
-BTC/USDT y (si pusiste tus keys) tu balance de testnet.
+PAXG/USDT (o el `SYMBOL` que hayas configurado) y (si pusiste tus keys)
+tu balance de testnet.
 
 ## Backtest
 
@@ -422,32 +425,38 @@ con una versión anterior de `backtester.py`, el dashboard lo sigue
 mostrando (con datos degradados: velas sin mecha, sin distinguir
 motivo de salida) — regeneralo para ver el detalle completo.
 
-**Para comparar varios símbolos** (por ejemplo BTC y oro/PAXG) en el
-mismo dashboard, exportá cada uno a un archivo distinto y agregalo a
-`dashboard/public/data/reports.json`:
+**Para comparar varios símbolos** (por ejemplo oro/PAXG y BTC) en el
+mismo dashboard, exportá cada uno a un archivo distinto (backtest +
+contexto) y agregalo a `dashboard/public/data/reports.json`:
 
 ```bash
-python backtester.py --export dashboard/public/data/backtest.json          # BTC (SYMBOL del .env)
-SYMBOL="PAXG/USDT" python backtester.py --export dashboard/public/data/backtest_paxg.json
+python backtester.py --export dashboard/public/data/backtest_paxg.json     # PAXG (SYMBOL del .env)
+SYMBOL="BTC/USDT" python backtester.py --export dashboard/public/data/backtest.json
+python -m context_engine --symbol PAXG/USDT --export dashboard/public/data/context_paxg.json
+python -m context_engine --symbol BTC/USDT --export dashboard/public/data/context.json
 ```
 
 ```json
 [
-  { "label": "BTC/USDT", "file": "backtest.json" },
-  { "label": "PAXG/USDT (oro)", "file": "backtest_paxg.json" }
+  { "label": "PAXG/USDT (oro)", "file": "backtest_paxg.json", "context": "context_paxg.json" },
+  { "label": "BTC/USDT", "file": "backtest.json", "context": "context.json" }
 ]
 ```
 
 El dashboard muestra un selector arriba a la derecha cuando hay más de
 un reporte listado. Ya incluye datos de ejemplo sintéticos para ambos
 (marcados como demo en el propio dashboard) para que no se vea vacío
-hasta que corras tus propios backtests.
+hasta que corras tus propios backtests. PAXG/USDT (oro) aparece primero
+y es el seleccionado por default, siguiendo el foco del bot.
 
 Arriba de todo hay además un panel **"Contexto de mercado"**, que lee
-`dashboard/public/data/context.json` (el que exporta `context_engine`).
-Es independiente del backtest: si el archivo no existe, el panel se
-repliega solo y explica el comando para generarlo, sin romper el resto
-del dashboard.
+el archivo indicado en el campo `context` de la entrada de
+`reports.json` actualmente seleccionada (el que exporta
+`context_engine`) — cada símbolo tiene su propio contexto, y cambiar el
+selector recarga el panel con el del símbolo elegido. Es independiente
+del backtest: si el campo `context` falta o el archivo no existe, el
+panel se repliega solo y explica el comando para generarlo, sin romper
+el resto del dashboard.
 
 ## Estado del proyecto
 

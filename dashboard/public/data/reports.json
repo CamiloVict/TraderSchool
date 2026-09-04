@@ -1,4 +1,4 @@
 [
-  { "label": "BTC/USDT", "file": "backtest.json" },
-  { "label": "PAXG/USDT (oro)", "file": "backtest_paxg.json" }
+  { "label": "PAXG/USDT (oro)", "file": "backtest_paxg.json", "context": "context_paxg.json" },
+  { "label": "BTC/USDT", "file": "backtest.json", "context": "context.json" }
 ]
