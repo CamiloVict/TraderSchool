@@ -55,6 +55,30 @@ simplemente lo que la cuenta testnet tiene en ese momento).
 **Nunca coloca órdenes si `BINANCE_TESTNET` no es `true`** — `executor.py`
 lo verifica antes de cada orden y lanza `LiveTradingDisabledError` si no.
 
+## Dashboard (React)
+
+```bash
+cd dashboard
+npm install
+npm run dev
+```
+
+Panel visual del backtest: KPIs (retorno, win rate, drawdown, # de
+operaciones), gráfico de precio con EMA 20/50 y marcadores de
+compra/venta, curva de equity, y tabla de operaciones. Ver
+`dashboard/README.md`.
+
+Es un panel **estático**, no en vivo: lee `dashboard/public/data/backtest.json`,
+que genera `backtester.py`:
+
+```bash
+python backtester.py --export dashboard/public/data/backtest.json
+```
+
+Ya incluye un `backtest.json` de ejemplo con datos sintéticos (marcado
+como demo en el propio dashboard) para que no se vea vacío hasta que
+corras el backtest con datos reales del testnet.
+
 ## Estado del proyecto
 
 - [x] Estructura del proyecto
@@ -63,10 +87,12 @@ lo verifica antes de cada orden y lanza `LiveTradingDisabledError` si no.
   trading en testnet (`python main.py --trade`)
 - [x] `strategy.py`: cruce de EMA 20/50, long-only
 - [x] `backtester.py`: simulación + métricas (retorno, win rate, drawdown)
+  y exportación a JSON para el dashboard (`--export`)
 - [x] `risk_manager.py`: tamaño de posición por % de riesgo, precios de
   stop-loss/take-profit, límite de pérdida diaria (`DailyLossTracker`)
 - [x] `executor.py`: órdenes de mercado en Testnet, bloqueadas si
   `USE_TESTNET` es `False`
+- [x] `dashboard/`: panel React (Vite) para visualizar resultados del backtest
 
 ## Decisiones tomadas hasta ahora
 
@@ -110,3 +136,11 @@ lo verifica antes de cada orden y lanza `LiveTradingDisabledError` si no.
   real habría que agregar una orden STOP_LOSS_LIMIT real — lo dejo para
   discutir contigo, es una decisión de arquitectura no trivial (maneja
   fills parciales, cancelaciones, etc.).
+- **Dashboard sin backend, por ahora**: en vez de levantar una API
+  (FastAPI/Flask) para que React consuma datos en vivo, el dashboard
+  lee un JSON estático exportado por `backtester.py`. Es la opción más
+  simple para "ver los resultados del backtest" — que es lo que
+  necesitábamos ahora — sin sumar un servidor a mantener. Si más
+  adelante quieres ver la posición/balance en vivo (no solo backtests),
+  eso sí requiere un pequeño backend — decisión de arquitectura que
+  prefiero discutir contigo antes de construirla.

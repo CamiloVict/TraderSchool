@@ -13,24 +13,22 @@ Assumptions (deliberate simplifications, worth knowing about):
   - A flat per-trade fee approximates Binance's spot taker fee so the
     backtest isn't unrealistically optimistic.
 """
+import json
+from datetime import datetime, timezone
+
 import numpy as np
 import pandas as pd
 
-from strategy import SLOW_PERIOD, add_signals
+from strategy import FAST_PERIOD, SLOW_PERIOD, add_signals
 
 TAKER_FEE_PCT = 0.1  # Binance default spot taker fee, %
 
 
-def run_backtest(
-    df: pd.DataFrame,
-    initial_capital: float = 1000.0,
-    fast: int = None,
-    slow: int = None,
-) -> dict:
-    """Simulate the EMA-crossover strategy over `df` and return metrics.
+def _simulate(df: pd.DataFrame, initial_capital: float, fast: int = None, slow: int = None):
+    """Core simulation loop, shared by run_backtest() and export_report().
 
-    `df` must have a 'close' column indexed by time (as returned by
-    data_fetcher.fetch_ohlcv / fetch_ohlcv_history).
+    Returns (metrics: dict, data: DataFrame with equity/drawdown columns
+    added, trades: list of per-trade dicts).
     """
     kwargs = {}
     if fast is not None:
@@ -45,28 +43,45 @@ def run_backtest(
     capital = initial_capital
     position = 0  # 0 = flat, 1 = long
     entry_price = 0.0
-    trade_returns = []
+    entry_time = None
+    trades = []
     equity_curve = []
 
-    for _, row in data.iterrows():
+    for timestamp, row in data.iterrows():
         price = row["close"]
         signal = row["signal"]
 
         if position == 0 and signal == 1:
             position = 1
             entry_price = price
+            entry_time = timestamp
             capital *= 1 - TAKER_FEE_PCT / 100
         elif position == 1 and signal == 0:
             trade_return = price / entry_price - 1
             capital *= price / entry_price
             capital *= 1 - TAKER_FEE_PCT / 100
-            trade_returns.append(trade_return)
+            trades.append(
+                {
+                    "entry_time": entry_time,
+                    "entry_price": float(entry_price),
+                    "exit_time": timestamp,
+                    "exit_price": float(price),
+                    "return_pct": float(trade_return * 100),
+                }
+            )
             position = 0
 
         equity_curve.append(capital * (price / entry_price) if position == 1 else capital)
 
+    data["equity"] = equity_curve
+    if len(data):
+        running_max = data["equity"].cummax()
+        data["drawdown_pct"] = (data["equity"] - running_max) / running_max * 100
+    else:
+        data["drawdown_pct"] = []
+
     if not equity_curve:
-        return {
+        metrics = {
             "initial_capital": initial_capital,
             "final_capital": initial_capital,
             "total_return_pct": 0.0,
@@ -75,36 +90,122 @@ def run_backtest(
             "max_drawdown_pct": 0.0,
             "avg_trade_return_pct": 0.0,
         }
+        return metrics, data, trades
 
-    equity_series = pd.Series(equity_curve, index=data.index)
-    running_max = equity_series.cummax()
-    drawdown_pct = (equity_series - running_max) / running_max * 100
+    wins = [t for t in trades if t["return_pct"] > 0]
+    trade_returns = [t["return_pct"] / 100 for t in trades]
 
-    wins = [r for r in trade_returns if r > 0]
-
-    return {
+    metrics = {
         "initial_capital": initial_capital,
-        "final_capital": float(equity_series.iloc[-1]),
-        "total_return_pct": float(equity_series.iloc[-1] / initial_capital - 1) * 100,
-        "num_trades": len(trade_returns),
-        "win_rate_pct": (len(wins) / len(trade_returns) * 100) if trade_returns else 0.0,
-        "max_drawdown_pct": float(drawdown_pct.min()),
+        "final_capital": float(data["equity"].iloc[-1]),
+        "total_return_pct": float(data["equity"].iloc[-1] / initial_capital - 1) * 100,
+        "num_trades": len(trades),
+        "win_rate_pct": (len(wins) / len(trades) * 100) if trades else 0.0,
+        "max_drawdown_pct": float(data["drawdown_pct"].min()),
         "avg_trade_return_pct": float(np.mean(trade_returns) * 100) if trade_returns else 0.0,
     }
+    return metrics, data, trades
+
+
+def run_backtest(
+    df: pd.DataFrame,
+    initial_capital: float = 1000.0,
+    fast: int = None,
+    slow: int = None,
+) -> dict:
+    """Simulate the EMA-crossover strategy over `df` and return metrics.
+
+    `df` must have a 'close' column indexed by time (as returned by
+    data_fetcher.fetch_ohlcv / fetch_ohlcv_history).
+    """
+    metrics, _, _ = _simulate(df, initial_capital, fast, slow)
+    return metrics
+
+
+def export_report(
+    df: pd.DataFrame,
+    output_path: str,
+    initial_capital: float = 1000.0,
+    fast: int = None,
+    slow: int = None,
+    symbol: str = None,
+    timeframe: str = None,
+    is_demo: bool = False,
+) -> dict:
+    """Run the backtest and write a JSON report the React dashboard reads:
+    metrics, per-candle close/EMA/signal/equity, and the trade list.
+    Returns the same dict that's written to disk.
+    """
+    metrics, data, trades = _simulate(df, initial_capital, fast, slow)
+
+    candles = [
+        {
+            "timestamp": ts.isoformat(),
+            "close": float(row["close"]),
+            "ema_fast": float(row["ema_fast"]),
+            "ema_slow": float(row["ema_slow"]),
+            "signal": int(row["signal"]),
+            "equity": float(row["equity"]),
+            "drawdown_pct": float(row["drawdown_pct"]),
+        }
+        for ts, row in data.iterrows()
+    ]
+
+    report = {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "is_demo": is_demo,
+        "strategy": {"fast_ema": fast or FAST_PERIOD, "slow_ema": slow or SLOW_PERIOD},
+        "metrics": metrics,
+        "candles": candles,
+        "trades": [
+            {
+                "entry_time": t["entry_time"].isoformat(),
+                "entry_price": t["entry_price"],
+                "exit_time": t["exit_time"].isoformat(),
+                "exit_price": t["exit_price"],
+                "return_pct": t["return_pct"],
+            }
+            for t in trades
+        ],
+    }
+
+    with open(output_path, "w") as f:
+        json.dump(report, f, indent=2)
+
+    return report
 
 
 if __name__ == "__main__":
+    import argparse
+
     from config import SYMBOL, TIMEFRAME
     from data_fetcher import fetch_ohlcv_history, get_exchange
 
+    parser = argparse.ArgumentParser(description="Backtest the EMA-crossover strategy")
+    parser.add_argument(
+        "--export",
+        metavar="PATH",
+        help="Also write a JSON report for the dashboard (e.g. dashboard/public/data/backtest.json)",
+    )
+    parser.add_argument("--days", type=int, default=180, help="Days of history to fetch (default 180)")
+    args = parser.parse_args()
+
     exchange = get_exchange()
     since_ms = exchange.parse8601(
-        (pd.Timestamp.utcnow() - pd.Timedelta(days=180)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        (pd.Timestamp.utcnow() - pd.Timedelta(days=args.days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
-    print(f"Fetching {SYMBOL} {TIMEFRAME} history (last ~180 days) ...")
+    print(f"Fetching {SYMBOL} {TIMEFRAME} history (last ~{args.days} days) ...")
     history = fetch_ohlcv_history(exchange, symbol=SYMBOL, timeframe=TIMEFRAME, since_ms=since_ms)
     print(f"Got {len(history)} candles: {history.index.min()} -> {history.index.max()}\n")
 
-    metrics = run_backtest(history)
+    if args.export:
+        report = export_report(history, args.export, symbol=SYMBOL, timeframe=TIMEFRAME)
+        metrics = report["metrics"]
+        print(f"Report written to {args.export}")
+    else:
+        metrics = run_backtest(history)
+
     for key, value in metrics.items():
         print(f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}")

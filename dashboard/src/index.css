@@ -1,0 +1,44 @@
+:root {
+  color-scheme: dark;
+
+  --bg: #0b0e14;
+  --surface: #131722;
+  --surface-2: #171b26;
+  --border: #232733;
+  --text: #e6e9ef;
+  --text-dim: #8b92a5;
+  --text-faint: #5b6272;
+
+  --green: #26a69a;
+  --green-dim: #1a3b38;
+  --red: #ef5350;
+  --red-dim: #3b2323;
+  --blue: #5b8def;
+  --orange: #f0a742;
+
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+a {
+  color: var(--blue);
+}
