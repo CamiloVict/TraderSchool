@@ -26,13 +26,24 @@ python main.py
 Deberías ver la lista de mercados cargada, las últimas 10 velas de
 BTC/USDT y (si pusiste tus keys) tu balance de testnet.
 
-## Estado del proyecto (Fase 1)
+## Backtest
+
+```bash
+python backtester.py
+```
+
+Trae ~180 días de velas de BTC/USDT 1h desde el testnet y corre la
+estrategia de cruce de medias sobre ese histórico, imprimiendo:
+retorno total, win rate, drawdown máximo, número de operaciones y
+retorno promedio por operación.
+
+## Estado del proyecto
 
 - [x] Estructura del proyecto
 - [x] `data_fetcher.py`: conexión vía ccxt en modo sandbox + histórico OHLCV
 - [x] `main.py`: script de verificación de conexión y datos
-- [ ] `strategy.py`: cruce de medias móviles (Fase 2)
-- [ ] `backtester.py`: métricas sobre datos históricos (Fase 2)
+- [x] `strategy.py`: cruce de EMA 20/50, long-only
+- [x] `backtester.py`: simulación + métricas (retorno, win rate, drawdown)
 - [ ] `risk_manager.py`: stop-loss, sizing, límites diarios (Fase 3)
 - [ ] `executor.py`: órdenes en Testnet (Fase 3+, nunca en real todavía)
 
@@ -50,6 +61,16 @@ BTC/USDT y (si pusiste tus keys) tu balance de testnet.
   para que `risk_manager.py` tenga algo que importar en la Fase 3. Son
   valores conservadores típicos, no una decisión de estrategia final —
   se revisan antes de implementar `risk_manager.py`.
-- **`strategy.py`/`backtester.py`/`risk_manager.py`/`executor.py` son
-  stubs** con TODOs: la estructura pedida está completa, pero solo
-  Fase 1 (datos) está implementada, según lo indicado.
+- **Estrategia: cruce de EMA 20/50, solo largos.** EMA en vez de SMA
+  porque reacciona más rápido a cambios de precio recientes (menos
+  retraso entre la señal y el movimiento real). 20/50 como punto medio:
+  suficientemente rápido para capturar tendencias de varios días,
+  suficientemente lento para no operar en cada ruido de una vela. Sin
+  shorts porque una cuenta Spot no puede vender en corto de forma nativa.
+- **Backtest asume fill al cierre de la vela de cruce** y aplica una
+  comisión plana de 0.1% (taker fee típico de Binance Spot) por operación,
+  para no inflar artificialmente el retorno. Es una simplificación — por
+  eso después probamos en testnet además de backtestear.
+- **`risk_manager.py`/`executor.py` siguen siendo stubs**: ningún riesgo
+  real de capital hasta que existan sizing/stop-loss y hasta que decidamos
+  juntos pasar a ejecución en testnet.
