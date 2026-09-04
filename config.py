@@ -36,3 +36,7 @@ STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "2.0"))
 TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "4.0"))
 # Daily circuit breaker: stop trading for the day after losing this % of capital.
 MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
+# How far below the stop-loss trigger the STOP_LOSS_LIMIT's limit price
+# sits, so the order still fills during a fast drop instead of resting
+# unfilled above the market once triggered.
+STOP_LOSS_LIMIT_SLIPPAGE_PCT = float(os.getenv("STOP_LOSS_LIMIT_SLIPPAGE_PCT", "0.5"))

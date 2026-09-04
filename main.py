@@ -16,12 +16,14 @@ log, and easy to kill/restart without losing track of state — the
 "state" is just whatever the Testnet account currently holds, read
 fresh from the exchange every time (see executor.get_base_asset_balance).
 
-Known limitation, flagged deliberately: --trade exits purely on the
-next EMA-crossover signal. risk_manager.stop_loss_price() is used to
-size the position, but no hard stop-loss/take-profit order is placed
-on the exchange — so a sharp move between candle closes isn't capped
-until the next hourly check. Fine for Testnet; worth revisiting
-(e.g. an actual STOP_LOSS_LIMIT order) before any real capital.
+Every buy is immediately followed by a real STOP_LOSS_LIMIT sell order
+on the exchange (see executor.place_stop_loss_order), so a sharp move
+between hourly checks is capped without waiting for the next candle.
+The EMA-crossover exit still applies on top of that — whichever comes
+first closes the position. Known limitation, still flagged
+deliberately: no take-profit order is placed (risk_manager.take_profit_price()
+is computed but unused) — exits on a favorable move still wait for the
+EMA to cross back, not a fixed target.
 """
 import argparse
 import sys
@@ -68,8 +70,18 @@ def run_trading_cycle(exchange=None) -> dict:
     """Fetch the latest signal and, if it differs from the account's
     current position, place a single Testnet order. Returns a dict
     describing what happened, and also prints it."""
-    from executor import get_base_asset_balance, get_quote_asset_balance, place_market_order
-    from risk_manager import position_size
+    from executor import (
+        cancel_order,
+        get_average_fill_price,
+        get_base_asset_balance,
+        get_last_fill_price,
+        get_open_stop_loss_orders,
+        get_quote_asset_balance,
+        get_total_base_asset_balance,
+        place_market_order,
+        place_stop_loss_order,
+    )
+    from risk_manager import position_size, stop_loss_price
 
     exchange = exchange or get_exchange()
     df = fetch_ohlcv(exchange, symbol=SYMBOL, timeframe=TIMEFRAME, limit=SLOW_PERIOD * 3)
@@ -78,13 +90,17 @@ def run_trading_cycle(exchange=None) -> dict:
     price = float(latest["close"])
     signal = int(latest["signal"])
 
-    base_balance = get_base_asset_balance(exchange, SYMBOL)
+    # Total (free + locked) balance: an open stop-loss order locks the
+    # coins it covers out of the *free* balance, so checking only free
+    # balance would make an already-protected position look flat.
+    total_balance = get_total_base_asset_balance(exchange, SYMBOL)
     # Dust threshold: ignore leftover balances worth less than $10 so
     # rounding from previous fills doesn't look like an open position.
-    in_position = base_balance * price > 10
+    in_position = total_balance * price > 10
 
     action = "hold"
     order = None
+    stop_order = None
 
     if signal == 1 and not in_position:
         quote_balance = get_quote_asset_balance(exchange, SYMBOL)
@@ -92,9 +108,30 @@ def run_trading_cycle(exchange=None) -> dict:
         if size > 0:
             order = place_market_order(exchange, SYMBOL, "buy", size)
             action = "buy"
+            entry_price = get_average_fill_price(order) or price
+            filled_amount = float(order.get("filled") or size)
+            stop_order = place_stop_loss_order(
+                exchange, SYMBOL, filled_amount, stop_loss_price(entry_price)
+            )
     elif signal == 0 and in_position:
-        order = place_market_order(exchange, SYMBOL, "sell", base_balance)
+        # Cancel the protective stop first so it doesn't compete with
+        # this market sell for the same (currently locked) balance.
+        for stale_order in get_open_stop_loss_orders(exchange, SYMBOL):
+            cancel_order(exchange, SYMBOL, stale_order["id"])
+        free_balance = get_base_asset_balance(exchange, SYMBOL)
+        order = place_market_order(exchange, SYMBOL, "sell", free_balance)
         action = "sell"
+    elif in_position and not get_open_stop_loss_orders(exchange, SYMBOL):
+        # Self-heal: holding a position with no protective stop on the
+        # exchange (e.g. a previous run crashed between the buy and the
+        # stop-loss placement, or it was cancelled outside the bot).
+        # Reconstruct the entry price from the last buy fill so the
+        # position isn't left unprotected until the next EMA exit.
+        entry_price = get_last_fill_price(exchange, SYMBOL, "buy") or price
+        stop_order = place_stop_loss_order(
+            exchange, SYMBOL, total_balance, stop_loss_price(entry_price)
+        )
+        action = "stop_loss_replaced"
 
     result = {
         "timestamp": str(latest.name),
@@ -103,6 +140,7 @@ def run_trading_cycle(exchange=None) -> dict:
         "in_position_before": in_position,
         "action": action,
         "order_id": order.get("id") if order else None,
+        "stop_order_id": stop_order.get("id") if stop_order else None,
     }
     print(result)
     return result

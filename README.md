@@ -65,6 +65,17 @@ de vela (cron/systemd timer cada hora), así cada corrida es corta, fácil
 de loguear y de matar/reiniciar sin perder estado (el "estado" es
 simplemente lo que la cuenta testnet tiene en ese momento).
 
+Cada compra coloca de inmediato una orden `STOP_LOSS_LIMIT` real en el
+exchange (`executor.place_stop_loss_order`), al precio de
+`risk_manager.stop_loss_price()`. La posición se cierra por lo que
+ocurra primero: el stop-loss se dispara, o la EMA rápida vuelve a
+cruzar por debajo — en ese segundo caso, el ciclo cancela el stop antes
+de vender por mercado, porque el stop deja el balance "locked" (no
+disponible para otra orden). Si un ciclo encuentra una posición abierta
+sin stop-loss vigente (por ejemplo, el proceso se cortó justo después
+de comprar), lo reconstruye a partir del último fill de compra en vez
+de dejar la posición desprotegida hasta el próximo cruce.
+
 **Nunca coloca órdenes si `BINANCE_TESTNET` no es `true`** — `executor.py`
 lo verifica antes de cada orden y lanza `LiveTradingDisabledError` si no.
 
@@ -103,9 +114,13 @@ corras el backtest con datos reales del testnet.
   y exportación a JSON para el dashboard (`--export`)
 - [x] `risk_manager.py`: tamaño de posición por % de riesgo, precios de
   stop-loss/take-profit, límite de pérdida diaria (`DailyLossTracker`)
-- [x] `executor.py`: órdenes de mercado en Testnet, bloqueadas si
-  `USE_TESTNET` es `False`
+- [x] `executor.py`: órdenes de mercado y stop-loss real
+  (`STOP_LOSS_LIMIT`) en Testnet, bloqueadas si `USE_TESTNET` es `False`
 - [x] `dashboard/`: panel React (Vite) para visualizar resultados del backtest
+- [x] `test_trading_cycle.py`: tests offline (sin red) del ciclo de
+  trading contra un exchange falso — compra + coloca stop, cancela el
+  stop antes de vender por señal, reconstruye un stop faltante. Correr
+  con `python -m unittest test_trading_cycle -v`
 
 ## Decisiones tomadas hasta ahora
 
@@ -149,16 +164,26 @@ corras el backtest con datos reales del testnet.
   posición" — lo deduce leyendo el balance real de la cuenta testnet en
   cada corrida. Es más simple y sobrevive a reinicios/crashes sin
   desincronizarse del exchange.
-- **Limitación importante, señalada a propósito**: la salida de una
-  operación depende solo de que la EMA rápida vuelva a cruzar por debajo
-  de la lenta en la siguiente vela — todavía **no se coloca una orden de
-  stop-loss real en el exchange**. `risk_manager.stop_loss_price()` se
-  usa para calcular el tamaño de la posición, pero un movimiento brusco
-  entre cierres de vela no está protegido hasta el siguiente chequeo
-  horario. Es aceptable en testnet (dinero ficticio); antes de capital
-  real habría que agregar una orden STOP_LOSS_LIMIT real — lo dejo para
-  discutir contigo, es una decisión de arquitectura no trivial (maneja
-  fills parciales, cancelaciones, etc.).
+- **Stop-loss real en el exchange (`STOP_LOSS_LIMIT`)**: cada compra
+  coloca de inmediato una orden protectora al precio de
+  `risk_manager.stop_loss_price()`, en vez de depender solo del
+  siguiente cruce de EMA. El precio límite de esa orden queda un poco
+  por debajo del precio de disparo (`STOP_LOSS_LIMIT_SLIPPAGE_PCT`,
+  0.5% por defecto) para que siga llenándose en una caída rápida en vez
+  de quedar como limit sin ejecutar por encima del mercado.
+  **Consecuencia no obvia**: mientras el stop está activo, esos BTC
+  quedan "locked" en el balance de Binance, no "free" — por eso
+  `main.py --trade` ahora decide "¿estoy en posición?" mirando balance
+  total (free + locked), y antes de vender por la señal de EMA cancela
+  el stop primero (si no, compiten por el mismo balance). Si un ciclo
+  arranca con una posición abierta pero sin stop vigente (el proceso se
+  cortó entre comprar y colocar el stop, o alguien lo canceló a mano),
+  lo reconstruye leyendo el último fill de compra vía
+  `exchange.fetch_my_trades()` en vez de dejarla desprotegida.
+  **Sigue pendiente**, y señalado a propósito: no hay take-profit real
+  en el exchange — `risk_manager.take_profit_price()` está calculado
+  pero no se usa; una salida favorable todavía espera el cruce inverso
+  de EMA, no un objetivo fijo.
 - **Dashboard sin backend, por ahora**: en vez de levantar una API
   (FastAPI/Flask) para que React consuma datos en vivo, el dashboard
   lee un JSON estático exportado por `backtester.py`. Es la opción más
