@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-04T19:00:00+00:00",
+  "timestamp": "2026-09-04T21:00:00+00:00",
   "asset": "BTC/USDT",
   "version": "0.1.0",
   "data_quality": {
@@ -8,17 +8,17 @@
     "issues": []
   },
   "regime": {
-    "primary": "RANGING",
+    "primary": "TRANSITION",
     "volatility": "HIGH",
     "phase": "EXPANSION"
   },
   "multi_timeframe": {
     "1w": "DOWN",
     "1d": "RANGING",
-    "4h": "RANGING",
+    "4h": "UP",
     "1h": "DOWN"
   },
-  "alignment": "PARTIAL_ALIGNMENT",
+  "alignment": "CONFLICT",
   "structure": {
     "1w": {
       "trend": "DOWN",
@@ -129,27 +129,21 @@
       ]
     },
     "4h": {
-      "trend": "RANGING",
+      "trend": "UP",
       "sequence": [
-        "LL",
         "LH",
         "LH",
         "LL",
         "LL",
-        "HH"
+        "HH",
+        "HL"
       ],
       "last_bos": "BULLISH_BOS",
       "last_choch": "BULLISH_CHOCH",
-      "phase": "CONSOLIDATION",
+      "phase": "PULLBACK",
       "last_swing_high": 82300.0,
-      "last_swing_low": 76264.0,
+      "last_swing_low": 78660.0,
       "swings": [
-        {
-          "timestamp": "2026-08-30T20:00:00+00:00",
-          "price": 77000.0,
-          "kind": "LOW",
-          "confirmed_at": "2026-08-31T04:00:00+00:00"
-        },
         {
           "timestamp": "2026-08-31T16:00:00+00:00",
           "price": 79250.0,
@@ -179,6 +173,12 @@
           "price": 82300.0,
           "kind": "HIGH",
           "confirmed_at": "2026-09-04T04:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-09-04T12:00:00+00:00",
+          "price": 78660.0,
+          "kind": "LOW",
+          "confirmed_at": "2026-09-04T20:00:00+00:00"
         }
       ]
     },
@@ -255,7 +255,7 @@
         "name": "PWH",
         "price": 81478.87,
         "kind": "HIGH",
-        "swept": true
+        "swept": false
       },
       {
         "name": "PWL",
@@ -267,7 +267,7 @@
         "name": "PMH",
         "price": 81478.87,
         "kind": "HIGH",
-        "swept": true
+        "swept": false
       },
       {
         "name": "PML",
@@ -277,82 +277,65 @@
       }
     ],
     "equal_highs": [
-      77823.08,
       78015.46666667,
       79563.66,
-      79761.968,
+      79784.47,
       81228.18833333,
       81785.0
     ],
     "equal_lows": [
-      77614.93857143,
+      77655.882,
       78682.0,
       79380.595,
+      79492.11,
+      79643.065,
       80600.14,
       80866.898,
       81079.005
     ],
-    "events": [
-      {
-        "kind": "SWEEP_HIGH",
-        "level_name": "PWH",
-        "level": 81478.87,
-        "occurred_at": "2026-09-03T21:00:00+00:00",
-        "reclaimed": true,
-        "displacement": false
-      },
-      {
-        "kind": "SWEEP_HIGH",
-        "level_name": "PMH",
-        "level": 81478.87,
-        "occurred_at": "2026-09-03T21:00:00+00:00",
-        "reclaimed": true,
-        "displacement": false
-      }
-    ],
-    "recent_event": "SWEEP_HIGH"
+    "events": [],
+    "recent_event": null
   },
   "volatility": {
-    "atr": 547.15554451,
-    "atr_percent": 0.6867,
+    "atr": 506.61003583,
+    "atr_percent": 0.637,
     "regime": "HIGH",
     "expansion": false,
     "contraction": false,
-    "percentile": 84.0
+    "percentile": 77.0
   },
   "range": {
     "name": "daily",
     "high": 82300.0,
     "low": 76264.0,
-    "position_percent": 56.53,
+    "position_percent": 54.17,
     "zone": "EQUILIBRIUM"
   },
   "sessions": {
-    "current": "NEW_YORK",
-    "high": 81350.0,
-    "low": 78660.0,
-    "range": 2690.0,
-    "previous": "LONDON",
-    "previous_high": 81423.03,
+    "current": null,
+    "high": null,
+    "low": null,
+    "range": null,
+    "previous": "NEW_YORK",
+    "previous_high": 81350.0,
     "previous_low": 78660.0
   },
   "events": [],
   "bias": {
-    "direction": "BEARISH",
-    "confidence": 0.44,
+    "direction": "NEUTRAL",
+    "confidence": 0.22,
     "reasons": [
       "1w structure bearish (LL/LH)",
-      "1h structure bearish (LL/LH)",
-      "SWEEP_HIGH at PMH (81478.9), reclaimed",
-      "NEW_YORK session active"
+      "4h structure bullish (HH/HL)",
+      "1h structure bearish (LL/LH)"
     ],
     "invalidations": [
-      "a close above the last swing high at 82300 breaks the bearish structure"
+      "bias is neutral; there is no directional hypothesis to invalidate"
     ]
   },
   "context_score": {
-    "total": -5.0,
-    "label": "BEARISH",
+    "total": -1.0,
+    "label": "NEUTRAL",
     "weights_version": "0.1.0",
     "components": [
       {
@@ -362,16 +345,16 @@
         "contribution": -2.0
       },
       {
+        "name": "4h trend",
+        "weight": 2.0,
+        "value": 1.0,
+        "contribution": 2.0
+      },
+      {
         "name": "1h trend",
         "weight": 1.0,
         "value": -1.0,
         "contribution": -1.0
-      },
-      {
-        "name": "liquidity sweep reclaimed",
-        "weight": 2.0,
-        "value": -1.0,
-        "contribution": -2.0
       }
     ]
   },
@@ -379,13 +362,15 @@
   "preferred_direction": "NONE",
   "preferred_setups": [],
   "avoid": [
-    "price sits mid-range on the daily range"
+    "higher timeframes conflict",
+    "price sits mid-range on the daily range",
+    "timeframe agreement is too low (0.22)"
   ],
   "no_trade": true,
   "invalidation": {
-    "type": "CLOSE_ABOVE",
-    "level": 82300.0,
-    "detail": "a close above the last swing high at 82300 breaks the bearish structure"
+    "type": "NONE",
+    "level": null,
+    "detail": "bias is neutral; there is no directional hypothesis to invalidate"
   },
   "risk": {
     "max_risk_per_trade_pct": 1.0,
