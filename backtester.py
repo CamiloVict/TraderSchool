@@ -146,8 +146,28 @@ def _simulate(
     else:
         data["drawdown_pct"] = []
 
-    if not equity_curve:
-        metrics = {
+    metrics = compute_metrics(data["close"], data["equity"], data["drawdown_pct"], trades, initial_capital, total_fees_paid)
+    return metrics, data, trades
+
+
+def compute_metrics(
+    close: pd.Series,
+    equity: pd.Series,
+    drawdown_pct: pd.Series,
+    trades: list,
+    initial_capital: float,
+    total_fees_paid: float,
+) -> dict:
+    """Metrics shared by every backtest loop in this repo, whatever
+    decides its entries/exits (EMA crossover here, the Setup Engine in
+    setup_engine_backtester.py). `stop_loss_exits` counts by the exact
+    exit_reason string "stop_loss"; `signal_exits` is everything else,
+    so it stays correct regardless of what a given strategy calls its
+    non-stop-loss exit (EMA cross, bias flip, no_trade, ...) — the
+    dashboard only ever reads these two keys, never the raw reasons.
+    """
+    if not len(equity):
+        return {
             "initial_capital": initial_capital,
             "final_capital": initial_capital,
             "total_return_pct": 0.0,
@@ -163,30 +183,29 @@ def _simulate(
             "avg_trade_duration_hours": 0.0,
             "total_fees_paid": 0.0,
         }
-        return metrics, data, trades
 
     wins = [t for t in trades if t["return_pct"] > 0]
     trade_returns = [t["return_pct"] / 100 for t in trades]
     durations_hours = [(t["exit_time"] - t["entry_time"]).total_seconds() / 3600 for t in trades]
-    buy_hold_return_pct = float(data["close"].iloc[-1] / data["close"].iloc[0] - 1) * 100
+    buy_hold_return_pct = float(close.iloc[-1] / close.iloc[0] - 1) * 100
+    stop_loss_exits = sum(1 for t in trades if t["exit_reason"] == "stop_loss")
 
-    metrics = {
+    return {
         "initial_capital": initial_capital,
-        "final_capital": float(data["equity"].iloc[-1]),
-        "total_return_pct": float(data["equity"].iloc[-1] / initial_capital - 1) * 100,
+        "final_capital": float(equity.iloc[-1]),
+        "total_return_pct": float(equity.iloc[-1] / initial_capital - 1) * 100,
         "buy_hold_return_pct": buy_hold_return_pct,
         "num_trades": len(trades),
         "win_rate_pct": (len(wins) / len(trades) * 100) if trades else 0.0,
-        "max_drawdown_pct": float(data["drawdown_pct"].min()),
+        "max_drawdown_pct": float(drawdown_pct.min()),
         "avg_trade_return_pct": float(np.mean(trade_returns) * 100) if trade_returns else 0.0,
         "best_trade_pct": float(max(t["return_pct"] for t in trades)) if trades else 0.0,
         "worst_trade_pct": float(min(t["return_pct"] for t in trades)) if trades else 0.0,
-        "stop_loss_exits": sum(1 for t in trades if t["exit_reason"] == "stop_loss"),
-        "signal_exits": sum(1 for t in trades if t["exit_reason"] == "signal"),
+        "stop_loss_exits": stop_loss_exits,
+        "signal_exits": len(trades) - stop_loss_exits,
         "avg_trade_duration_hours": float(np.mean(durations_hours)) if durations_hours else 0.0,
         "total_fees_paid": float(total_fees_paid),
     }
-    return metrics, data, trades
 
 
 def run_backtest(

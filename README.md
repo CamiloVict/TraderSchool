@@ -298,15 +298,50 @@ por defecto) de historial **real** de Binance para construir el
 contexto — mismo split que ya usa el backtest: datos reales para ver
 el mercado, Testnet solo para ejecutar.
 
-**Pendiente, señalado a propósito — backtesting de esto todavía no
-existe.** `build_context()` reconstruye los timeframes altos desde
-cero en cada llamada; correrlo por cada vela de un backtest de un año
-sería reconstruir un año de estructura semanal/diaria miles de veces.
-No lo apuré para no meter una implementación lenta o, peor, una que
-recorte esquinas de look-ahead para que ande rápido. Antes de
-respaldar `USE_SETUP_ENGINE=true` con un backtest histórico hace falta
-decidir cómo construir el contexto de forma incremental (o aceptar que
-sea lento y acotarlo a una ventana corta primero).
+### Backtest del Setup Engine (`setup_engine_backtester.py`)
+
+```bash
+python setup_engine_backtester.py --days 200 --context-window-days 90
+```
+
+`build_context()` reconstruye los timeframes altos desde cero en cada
+llamada, así que su costo crece con cuánto historial le des —
+alimentarlo con una ventana que crece con cada vela del backtest (todo
+el historial desde el principio) haría que el costo total sea
+cuadrático: en las mediciones de esta sesión, cada llamada tarda
+~0.06s + ~0.00007s por vela de historial, y sumando eso sobre un año
+completo de decisiones da **~50-100 minutos** para un solo backtest.
+
+Por eso este backtest usa una **ventana móvil**: en cada vela reconstruye
+el contexto con los últimos `--context-window-days` días nada más, tal
+como haría un ciclo en vivo de `main.py --trade` (que tampoco pide
+"todo el historial", pide `CONTEXT_HISTORY_DAYS`). Eso vuelve el costo
+total **lineal** en vez de cuadrático — sigue siendo lento (esperá del
+orden de un minuto cada ~1000 velas testeadas en esta máquina), pero
+predecible y sin crecer sin límite. Además, a diferencia de
+`main.py`, este loop no necesita reconstruir el contexto dos veces por
+vela para conseguir `previous_state` — lo toma directo del
+`market_state` que la propia iteración anterior ya calculó, algo que
+un proceso de un solo disparo como `main.py --trade` no puede hacer
+sin guardar estado en disco.
+
+**Recomendación práctica**: empezá con `--days` en el orden de cientos
+(no un año) y con `--context-window-days` más chico que
+`CONTEXT_HISTORY_DAYS` (90-180 en vez de 540) para iterar rápido;
+subilo recién cuando quieras un resultado para tomar en serio. El
+`--export` genera un JSON con la misma forma de métricas que
+`backtester.py` (reusa `compute_metrics()`, no la reimplementa) más
+`snapshots` (estado/bias/setups por vela testeada) en vez de las
+columnas de EMA, ya que acá no hay un indicador único para graficar.
+
+**Sigue pendiente, señalado a propósito**: nada de esto hace que
+`build_context()` sea más rápido por dentro — solo evita que un
+backtest le pida cada vez más historial. Si en algún momento hace
+falta correr años de historia rápido (para optimizar parámetros, por
+ejemplo), la solución real es un contexto incremental (actualizar
+estructura/liquidez con la vela nueva en vez de recalcular todo desde
+cero), que es un cambio bastante más grande y riesgoso — toca justo el
+código que más cuidado tiene con el look-ahead.
 
 ### Versionado
 
@@ -469,6 +504,15 @@ del dashboard.
 - [x] `test_risk_manager.py`: tests del `stop_price` explícito en
   `position_size()` (sizing correcto con un stop más ancho/angosto que
   el fijo, división por cero evitada, funciona también en `short`)
+- [x] `setup_engine_backtester.py`: backtest del ciclo del Setup Engine
+  con ventana móvil de contexto (costo lineal, no cuadrático, en la
+  cantidad de velas testeadas), reusando `compute_metrics()` de
+  `backtester.py`. `test_setup_engine_backtester.py` (7 tests): la
+  ventana nunca crece, `previous_state` viene de la propia iteración
+  anterior, P&L correcto contra un contexto simulado, y un smoke test
+  end-to-end real (más lento, a propósito, para agarrar roturas de
+  integración que un mock no vería)
+- [x] 140 tests en total en el repo — `python -m unittest discover`
 
 ## Decisiones tomadas hasta ahora
 
