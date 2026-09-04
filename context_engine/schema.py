@@ -15,6 +15,8 @@ Two rules shape this module:
 Enums subclass `str` so `dataclasses.asdict` and `json.dump` serialize
 them to their plain string value with no custom encoder.
 """
+from __future__ import annotations
+
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 

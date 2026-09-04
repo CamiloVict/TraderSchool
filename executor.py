@@ -5,6 +5,8 @@ order-placing function here asserts `config.USE_TESTNET is True`
 first. Real-money execution is a deliberate, separate decision for
 later — never a side effect of some other change.
 """
+from __future__ import annotations
+
 import ccxt
 
 from config import STOP_LOSS_LIMIT_SLIPPAGE_PCT, USE_TESTNET
