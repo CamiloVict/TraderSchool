@@ -1,0 +1,396 @@
+{
+  "timestamp": "2026-09-04T19:00:00+00:00",
+  "asset": "BTC/USDT",
+  "version": "0.1.0",
+  "data_quality": {
+    "valid": true,
+    "degraded": false,
+    "issues": []
+  },
+  "regime": {
+    "primary": "RANGING",
+    "volatility": "HIGH",
+    "phase": "EXPANSION"
+  },
+  "multi_timeframe": {
+    "1w": "DOWN",
+    "1d": "RANGING",
+    "4h": "RANGING",
+    "1h": "DOWN"
+  },
+  "alignment": "PARTIAL_ALIGNMENT",
+  "structure": {
+    "1w": {
+      "trend": "DOWN",
+      "sequence": [
+        "LH",
+        "HL",
+        "HH",
+        "LL",
+        "LL",
+        "LH"
+      ],
+      "last_bos": "BEARISH_BOS",
+      "last_choch": "BULLISH_CHOCH",
+      "phase": "PULLBACK",
+      "last_swing_high": 66956.15,
+      "last_swing_low": 57800.19,
+      "swings": [
+        {
+          "timestamp": "2026-03-16T00:00:00+00:00",
+          "price": 76000.0,
+          "kind": "HIGH",
+          "confirmed_at": "2026-03-30T00:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-03-23T00:00:00+00:00",
+          "price": 65000.0,
+          "kind": "LOW",
+          "confirmed_at": "2026-04-06T00:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-05-04T00:00:00+00:00",
+          "price": 82850.0,
+          "kind": "HIGH",
+          "confirmed_at": "2026-05-18T00:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-06-01T00:00:00+00:00",
+          "price": 59130.91,
+          "kind": "LOW",
+          "confirmed_at": "2026-06-15T00:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-06-29T00:00:00+00:00",
+          "price": 57800.19,
+          "kind": "LOW",
+          "confirmed_at": "2026-07-13T00:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-07-20T00:00:00+00:00",
+          "price": 66956.15,
+          "kind": "HIGH",
+          "confirmed_at": "2026-08-03T00:00:00+00:00"
+        }
+      ]
+    },
+    "1d": {
+      "trend": "RANGING",
+      "sequence": [
+        "HL",
+        "HH",
+        "HH",
+        "HH",
+        "HL",
+        "LL"
+      ],
+      "last_bos": "BULLISH_BOS",
+      "last_choch": "BULLISH_CHOCH",
+      "phase": "EXPANSION",
+      "last_swing_high": 81478.87,
+      "last_swing_low": 76264.0,
+      "swings": [
+        {
+          "timestamp": "2026-08-14T00:00:00+00:00",
+          "price": 62535.24,
+          "kind": "LOW",
+          "confirmed_at": "2026-08-16T00:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-08-21T00:00:00+00:00",
+          "price": 79500.0,
+          "kind": "HIGH",
+          "confirmed_at": "2026-08-23T00:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-08-25T00:00:00+00:00",
+          "price": 81272.62,
+          "kind": "HIGH",
+          "confirmed_at": "2026-08-27T00:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-08-28T00:00:00+00:00",
+          "price": 81478.87,
+          "kind": "HIGH",
+          "confirmed_at": "2026-08-30T00:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-08-28T00:00:00+00:00",
+          "price": 76888.0,
+          "kind": "LOW",
+          "confirmed_at": "2026-08-30T00:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-09-02T00:00:00+00:00",
+          "price": 76264.0,
+          "kind": "LOW",
+          "confirmed_at": "2026-09-04T00:00:00+00:00"
+        }
+      ]
+    },
+    "4h": {
+      "trend": "RANGING",
+      "sequence": [
+        "LL",
+        "LH",
+        "LH",
+        "LL",
+        "LL",
+        "HH"
+      ],
+      "last_bos": "BULLISH_BOS",
+      "last_choch": "BULLISH_CHOCH",
+      "phase": "CONSOLIDATION",
+      "last_swing_high": 82300.0,
+      "last_swing_low": 76264.0,
+      "swings": [
+        {
+          "timestamp": "2026-08-30T20:00:00+00:00",
+          "price": 77000.0,
+          "kind": "LOW",
+          "confirmed_at": "2026-08-31T04:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-08-31T16:00:00+00:00",
+          "price": 79250.0,
+          "kind": "HIGH",
+          "confirmed_at": "2026-09-01T00:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-09-01T04:00:00+00:00",
+          "price": 79220.61,
+          "kind": "HIGH",
+          "confirmed_at": "2026-09-01T12:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-09-01T16:00:00+00:00",
+          "price": 76420.0,
+          "kind": "LOW",
+          "confirmed_at": "2026-09-02T00:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-09-02T08:00:00+00:00",
+          "price": 76264.0,
+          "kind": "LOW",
+          "confirmed_at": "2026-09-02T16:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-09-03T20:00:00+00:00",
+          "price": 82300.0,
+          "kind": "HIGH",
+          "confirmed_at": "2026-09-04T04:00:00+00:00"
+        }
+      ]
+    },
+    "1h": {
+      "trend": "DOWN",
+      "sequence": [
+        "LL",
+        "LH",
+        "LL",
+        "HH",
+        "LL",
+        "LH"
+      ],
+      "last_bos": "BEARISH_BOS",
+      "last_choch": "BEARISH_CHOCH",
+      "phase": "PULLBACK",
+      "last_swing_high": 79877.07,
+      "last_swing_low": 78660.0,
+      "swings": [
+        {
+          "timestamp": "2026-09-04T02:00:00+00:00",
+          "price": 80669.45,
+          "kind": "LOW",
+          "confirmed_at": "2026-09-04T04:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-09-04T04:00:00+00:00",
+          "price": 81288.0,
+          "kind": "HIGH",
+          "confirmed_at": "2026-09-04T06:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-09-04T08:00:00+00:00",
+          "price": 80502.87,
+          "kind": "LOW",
+          "confirmed_at": "2026-09-04T10:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-09-04T11:00:00+00:00",
+          "price": 81423.03,
+          "kind": "HIGH",
+          "confirmed_at": "2026-09-04T13:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-09-04T14:00:00+00:00",
+          "price": 78660.0,
+          "kind": "LOW",
+          "confirmed_at": "2026-09-04T16:00:00+00:00"
+        },
+        {
+          "timestamp": "2026-09-04T16:00:00+00:00",
+          "price": 79877.07,
+          "kind": "HIGH",
+          "confirmed_at": "2026-09-04T18:00:00+00:00"
+        }
+      ]
+    }
+  },
+  "liquidity": {
+    "levels": [
+      {
+        "name": "PDH",
+        "price": 82300.0,
+        "kind": "HIGH",
+        "swept": false
+      },
+      {
+        "name": "PDL",
+        "price": 76968.0,
+        "kind": "LOW",
+        "swept": false
+      },
+      {
+        "name": "PWH",
+        "price": 81478.87,
+        "kind": "HIGH",
+        "swept": true
+      },
+      {
+        "name": "PWL",
+        "price": 76670.01,
+        "kind": "LOW",
+        "swept": false
+      },
+      {
+        "name": "PMH",
+        "price": 81478.87,
+        "kind": "HIGH",
+        "swept": true
+      },
+      {
+        "name": "PML",
+        "price": 62275.0,
+        "kind": "LOW",
+        "swept": false
+      }
+    ],
+    "equal_highs": [
+      77823.08,
+      78015.46666667,
+      79563.66,
+      79761.968,
+      81228.18833333,
+      81785.0
+    ],
+    "equal_lows": [
+      77614.93857143,
+      78682.0,
+      79380.595,
+      80600.14,
+      80866.898,
+      81079.005
+    ],
+    "events": [
+      {
+        "kind": "SWEEP_HIGH",
+        "level_name": "PWH",
+        "level": 81478.87,
+        "occurred_at": "2026-09-03T21:00:00+00:00",
+        "reclaimed": true,
+        "displacement": false
+      },
+      {
+        "kind": "SWEEP_HIGH",
+        "level_name": "PMH",
+        "level": 81478.87,
+        "occurred_at": "2026-09-03T21:00:00+00:00",
+        "reclaimed": true,
+        "displacement": false
+      }
+    ],
+    "recent_event": "SWEEP_HIGH"
+  },
+  "volatility": {
+    "atr": 547.15554451,
+    "atr_percent": 0.6867,
+    "regime": "HIGH",
+    "expansion": false,
+    "contraction": false,
+    "percentile": 84.0
+  },
+  "range": {
+    "name": "daily",
+    "high": 82300.0,
+    "low": 76264.0,
+    "position_percent": 56.53,
+    "zone": "EQUILIBRIUM"
+  },
+  "sessions": {
+    "current": "NEW_YORK",
+    "high": 81350.0,
+    "low": 78660.0,
+    "range": 2690.0,
+    "previous": "LONDON",
+    "previous_high": 81423.03,
+    "previous_low": 78660.0
+  },
+  "events": [],
+  "bias": {
+    "direction": "BEARISH",
+    "confidence": 0.44,
+    "reasons": [
+      "1w structure bearish (LL/LH)",
+      "1h structure bearish (LL/LH)",
+      "SWEEP_HIGH at PMH (81478.9), reclaimed",
+      "NEW_YORK session active"
+    ],
+    "invalidations": [
+      "a close above the last swing high at 82300 breaks the bearish structure"
+    ]
+  },
+  "context_score": {
+    "total": -5.0,
+    "label": "BEARISH",
+    "weights_version": "0.1.0",
+    "components": [
+      {
+        "name": "weekly trend",
+        "weight": 2.0,
+        "value": -1.0,
+        "contribution": -2.0
+      },
+      {
+        "name": "1h trend",
+        "weight": 1.0,
+        "value": -1.0,
+        "contribution": -1.0
+      },
+      {
+        "name": "liquidity sweep reclaimed",
+        "weight": 2.0,
+        "value": -1.0,
+        "contribution": -2.0
+      }
+    ]
+  },
+  "market_state": "NO_TRADE",
+  "preferred_direction": "NONE",
+  "preferred_setups": [],
+  "avoid": [
+    "price sits mid-range on the daily range"
+  ],
+  "no_trade": true,
+  "invalidation": {
+    "type": "CLOSE_ABOVE",
+    "level": 82300.0,
+    "detail": "a close above the last swing high at 82300 breaks the bearish structure"
+  },
+  "risk": {
+    "max_risk_per_trade_pct": 1.0,
+    "max_daily_loss_pct": 5.0,
+    "stop_loss_pct": 2.0,
+    "high_volatility": true
+  }
+}

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import EquityChart from "./components/EquityChart";
 import KpiCard from "./components/KpiCard";
+import MarketContext from "./components/MarketContext";
 import StrategyExplainer from "./components/StrategyExplainer";
 import TradesTable from "./components/TradesTable";
 import TradingChart from "./components/TradingChart";
@@ -19,7 +20,18 @@ export default function App() {
   const [reports, setReports] = useState(DEFAULT_REPORTS);
   const [selectedFile, setSelectedFile] = useState(DEFAULT_REPORTS[0].file);
   const [report, setReport] = useState(null);
+  const [context, setContext] = useState(null);
   const [error, setError] = useState(null);
+
+  // The market context is optional and independent of the backtest, so
+  // a missing file resolves to null and the panel explains how to
+  // generate it rather than breaking the dashboard.
+  useEffect(() => {
+    fetch(`${DATA_DIR}/context.json`)
+      .then((res) => (res.ok ? res.json() : null))
+      .catch(() => null)
+      .then(setContext);
+  }, []);
 
   useEffect(() => {
     fetch(REPORTS_MANIFEST_URL)
@@ -111,6 +123,8 @@ export default function App() {
           )}
         </div>
       </header>
+
+      <MarketContext context={context} />
 
       <StrategyExplainer
         symbol={symbol}

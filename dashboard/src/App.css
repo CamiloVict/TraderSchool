@@ -272,3 +272,178 @@ details[open] > .explainer__summary::before {
   text-align: center;
   padding-top: 12px;
 }
+
+/* --- Market context panel --- */
+
+.tag--positive {
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+.tag--negative {
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+.context-verdict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--blue);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+/* A blocked verdict is the one thing that must never be skimmed past. */
+.context-verdict--blocked {
+  border-left-color: var(--orange);
+}
+
+.context-verdict__main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+
+.context-verdict__state {
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.context-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 8px 24px;
+}
+
+.context-block {
+  margin: 0;
+}
+
+.context-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.context-row__term {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.context-row__value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-timeframes,
+.context-levels {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.context-timeframe {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.context-timeframe b {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.context-level {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 11.5px;
+}
+
+/* Struck through once price has traded through it: spent liquidity is
+   no longer a level to expect a reaction from. */
+.context-level--swept {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.context-subtitle {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-weight: 500;
+  margin: 14px 0 4px;
+}
+
+.context-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.context-list li {
+  padding: 2px 0;
+}
+
+.context-list--warning {
+  color: var(--orange);
+  margin-bottom: 10px;
+}
+
+.context-invalidation {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding: 9px 12px;
+  background: var(--surface-2);
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.context-invalidation__label {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.context-invalidation__level {
+  font-variant-numeric: tabular-nums;
+  color: var(--orange);
+}
+
+.context-quality {
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.context-quality summary {
+  cursor: pointer;
+}
+
+.context-footnote {
+  margin: 12px 0 8px;
+}

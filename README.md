@@ -8,16 +8,24 @@ y validada.
 ## Setup
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 ```
 
-`python3` es necesario solo para crear el entorno virtual. Una vez que lo
-activás con `source .venv/bin/activate`, el comando `python` (sin el 3)
-ya funciona correctamente dentro de esa terminal — es al que se refieren
-el resto de los comandos de este README.
+`python3.12` es necesario solo para crear el entorno virtual. Una vez que
+lo activás con `source .venv/bin/activate`, el comando `python` (sin el
+3) ya funciona correctamente dentro de esa terminal — es al que se
+refieren el resto de los comandos de este README.
+
+**Por qué `python3.12` y no `python3` a secas:** en esta máquina el
+`python3` del PATH apunta al 3.14 de Homebrew, que tiene el módulo
+`pyexpat` roto. Crear el venv con él falla en `ensurepip` con un
+`CalledProcessError` y te deja un entorno sin `pip`, difícil de
+diagnosticar porque el error no menciona ni a `pyexpat` ni a XML. Fijar
+la versión evita el problema. Si en tu sistema `python3` ya es una
+versión sana (3.10+), podés usarlo sin más.
 
 1. Entra a https://testnet.binance.vision/, loguéate con GitHub y genera
    una API key (HMAC_SHA256).
@@ -110,6 +118,157 @@ EMA, no como estrategia propia — y solo doble techo/piso por ahora,
 el patrón más simple de detectar de forma confiable. H&S y triángulos
 quedan para después si este primer paso resulta útil en el backtest.
 
+## Daily Market Context Engine (`context_engine/`)
+
+```bash
+python -m context_engine --source real --days 540
+python -m context_engine --days 540 --export dashboard/public/data/context.json
+```
+
+Describe **en qué estado está el mercado** antes de pensar en ninguna
+entrada: régimen, bias por timeframe, estructura, liquidez, volatilidad,
+posición dentro del rango, sesión activa, score, y —lo más importante—
+qué tendría que pasar para que esa lectura quede invalidada.
+
+No genera señales ni órdenes. Es la capa de contexto sobre la que
+después se apoyará un Setup Engine; hoy `preferred_setups` sale siempre
+vacío a propósito.
+
+Pedile bastante historial: los niveles semanales necesitan ~60 velas de
+1w para tener estructura, así que con `--days 120` el timeframe `1w`
+queda en `UNDEFINED`. Con `--days 540` (unas 77 semanas) ya resuelve.
+
+### Cómo está partido
+
+Un módulo por motor, todos deterministas y puros — las mismas velas
+producen siempre el mismo snapshot, y ninguna función lee el reloj, la
+red ni el disco:
+
+| Módulo | Qué resuelve |
+| --- | --- |
+| `validation.py` | Calidad de datos: timestamps duplicados, OHLC inconsistente, velas faltantes, gaps anómalos, volumen negativo |
+| `timeframes.py` | `ensure_utc()` y resampleo anclado a UTC para derivar 4h/1d/1w desde 1h |
+| `features.py` | Primitivos compartidos: `ema`, `atr`, `rsi`, `vwap`, `true_range`, anatomía de vela |
+| `structure.py` | Swings confirmados, secuencia HH/HL/LH/LL, BOS, CHOCH, fase |
+| `liquidity.py` | PDH/PDL/PWH/PWL/PMH/PML, equal highs/lows, sweeps con `reclaimed` y `displacement` |
+| `volatility.py` | ATR, ATR%, régimen `VERY_LOW..EXTREME` por percentil, expansión/contracción |
+| `ranges.py` | Premium/equilibrio/descuento, siempre con el rango nombrado |
+| `sessions.py` | Asia/Londres/Nueva York en ventanas UTC |
+| `bias.py` | Bias por timeframe desde estructura + alineación entre timeframes |
+| `regime.py` | Régimen y clasificador de `market_state` |
+| `scoring.py` | Score ponderado y versionado, con el desglose de cada componente |
+| `engine.py` | Orquestador: arma el `ContextSnapshot`, las condiciones de no-trade y la invalidación |
+| `llm_interface.py` | Solo el contrato JSON de entrada/salida, sin proveedor |
+
+### Regla de oro: cero look-ahead
+
+Todo primitivo estructural declara **cuándo se supo**, no solo cuándo
+pasó. Un swing high en el índice `i` con `right=2` recién se conoce dos
+velas después, así que cada `Swing` lleva `timestamp` (cuándo imprimió el
+extremo) y `confirmed_at` (cuándo pasó a ser conocible). Filtrar por
+`timestamp` en vez de `confirmed_at` es exactamente cómo se cuela el
+look-ahead en un backtest.
+
+Lo mismo con el resto: un BOS necesita un **cierre** más allá del nivel
+(una mecha que lo perfora es liquidez tomada, no cambio de estructura), y
+un sweep no existe hasta que cierra la vela que decide si el nivel se
+recuperó o no.
+
+`build_context(frames, as_of=...)` corta todo a lo conocible en ese
+momento, y además **reconstruye** los timeframes altos desde la serie
+base recortada. Esto último es sutil y es donde estaba el bug más feo del
+milestone: una vela diaria se etiqueta con su hora de apertura, así que a
+las 14:00 la vela de las 00:00 pasa cualquier filtro `index <= as_of`
+—pero su máximo, mínimo y cierre se calcularon con las 24 horas
+completas, nueve de ellas todavía en el futuro. El test que lo agarró:
+
+```python
+def test_context_is_identical_when_future_candles_are_removed(self):
+    full = build_context(frames, as_of=t)
+    truncated = build_context(build_timeframe_set(df[df.index <= t]), as_of=t)
+    self.assertEqual(full.to_dict(), truncated.to_dict())
+```
+
+### El contrato
+
+`ContextSnapshot.to_dict()` devuelve un dict plano y serializable. Todo
+lo que expresa una decisión es un enum, nunca texto libre, y toda
+hipótesis viaja con su evidencia (`reasons`) y con lo que la refutaría
+(`invalidations`): una lectura que no se puede falsear no sirve.
+
+```json
+{
+  "timestamp": "2026-09-04T19:00:00+00:00",
+  "asset": "BTC/USDT",
+  "version": "0.1.0",
+  "data_quality": { "valid": true, "degraded": false, "issues": [] },
+  "regime": { "primary": "RANGING", "volatility": "HIGH", "phase": "EXPANSION" },
+  "multi_timeframe": { "1w": "DOWN", "1d": "RANGING", "4h": "RANGING", "1h": "DOWN" },
+  "alignment": "PARTIAL_ALIGNMENT",
+  "bias": { "direction": "BEARISH", "confidence": 0.44, "reasons": ["..."], "invalidations": ["..."] },
+  "context_score": { "total": -5.0, "label": "BEARISH", "weights_version": "0.1.0", "components": [] },
+  "market_state": "NO_TRADE",
+  "preferred_direction": "NONE",
+  "preferred_setups": [],
+  "avoid": ["price sits mid-range on the daily range"],
+  "no_trade": true,
+  "invalidation": { "type": "CLOSE_ABOVE", "level": 82300.0, "detail": "..." }
+}
+```
+
+Dos campos que conviene leer con atención:
+
+- **`no_trade` viene con `avoid`**: "no operar" es una respuesta válida,
+  pero solo sirve si dice *por qué*. Nunca sale un `no_trade: true` con
+  la lista vacía.
+- **`risk`** refleja de solo lectura los límites de `config.py`. El
+  contexto no calcula tamaño de posición ni puede ensanchar un límite;
+  eso sigue siendo territorio de `risk_manager.py`.
+
+### Versionado
+
+Dos versiones separadas, porque cambian por motivos distintos:
+
+- `CONTEXT_ENGINE_VERSION` sube cuando cambia el **significado** de algún
+  campo, para que un snapshot viejo no se compare en silencio con uno
+  nuevo.
+- `WEIGHTS_VERSION` sube cuando se re-pesa el score. Repesar no cambia lo
+  que significan los demás campos, pero sí invalida cualquier comparación
+  de scores, así que va estampada en cada snapshot.
+
+Los pesos viven en `params.py`, se pueden pasar por parámetro a
+`build_context(weights=...)`, y **son estimaciones, no valores
+optimizados**: elegidos para ser conservadores y legibles. Optimizarlos
+en serio necesita walk-forward, que todavía no existe.
+
+### Supuestos que conviene tener presentes
+
+- **Sesiones en UTC fijo** (Asia 00–08, Londres 07–16, Nueva York 12–21).
+  Londres y Nueva York se mueven con el horario de verano, así que
+  durante parte del año estas ventanas están corridas una hora. Es la
+  única aproximación consciente del motor; hacerlo bien implica mapear a
+  `Europe/London` y `America/New_York`, y quedó para después.
+- **`strategy.py` no se tocó.** Sigue calculando sus propias EMAs para el
+  backtest de cruce. Refactorizarlo para usar `features.ema()` arrastraría
+  al backtester, al dashboard y a dos tests sin ganar nada de
+  comportamiento. De acá en adelante, `features.ema()` es el primitivo
+  compartido para todo lo nuevo.
+- **Los `events` son un input**, con default vacío. El motor nunca
+  inventa un evento macro ni trae un feed propio; lista vacía significa
+  "no sé de ningún evento", no "no hay eventos".
+- **Las cadenas de `reasons`, `avoid` y `data_quality` salen en inglés**,
+  igual que los enums: son el contrato de máquina, el mismo que consume
+  `llm_interface.py`. Las etiquetas del panel sí están en español.
+
+### Tests
+
+```bash
+python -m unittest test_context_validation test_context_structure \
+                   test_context_liquidity test_context_engine -v
+```
+
+O toda la suite del repo (93 tests) con `python -m unittest discover`.
+
 ## Dashboard (React)
 
 ```bash
@@ -165,6 +324,12 @@ un reporte listado. Ya incluye datos de ejemplo sintéticos para ambos
 (marcados como demo en el propio dashboard) para que no se vea vacío
 hasta que corras tus propios backtests.
 
+Arriba de todo hay además un panel **"Contexto de mercado"**, que lee
+`dashboard/public/data/context.json` (el que exporta `context_engine`).
+Es independiente del backtest: si el archivo no existe, el panel se
+repliega solo y explica el comando para generarlo, sin romper el resto
+del dashboard.
+
 ## Estado del proyecto
 
 - [x] Estructura del proyecto
@@ -195,6 +360,13 @@ hasta que corras tus propios backtests.
 - [x] `test_patterns.py`: tests de la detección de doble techo/piso y
   del veto temporal sobre entradas. Correr los tres con
   `python -m unittest test_trading_cycle test_backtester test_patterns -v`
+- [x] `context_engine/`: motor determinista de contexto diario
+  (validación de datos, estructura, liquidez, volatilidad, sesiones,
+  rango, bias multi-timeframe, régimen y score versionado), con CLI
+  `python -m context_engine --export ...` y panel en el dashboard
+- [x] `test_context_*.py`: 80 tests del motor de contexto, incluido el de
+  look-ahead (el contexto en el momento `t` tiene que dar idéntico con o
+  sin las velas posteriores a `t` en la entrada)
 
 ## Decisiones tomadas hasta ahora
 
