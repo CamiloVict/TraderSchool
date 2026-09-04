@@ -1,18 +1,52 @@
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { useEffect, useRef } from "react";
+import { AreaSeries, createChart } from "lightweight-charts";
 
-import { formatDateShort, formatDateTime, formatUsd } from "../lib/format";
+const COLORS = { text: "#8b92a5", border: "#232733", green: "#26a69a", faint: "#5b6272" };
+
+function toUnixSeconds(iso) {
+  return Math.floor(new Date(iso).getTime() / 1000);
+}
 
 export default function EquityChart({ candles, initialCapital }) {
-  const data = candles.map((c) => ({ x: new Date(c.timestamp).getTime(), equity: c.equity }));
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!containerRef.current || !candles.length) return undefined;
+
+    const chart = createChart(containerRef.current, {
+      autoSize: true,
+      layout: { background: { color: "transparent" }, textColor: COLORS.text, fontSize: 12 },
+      grid: {
+        vertLines: { color: COLORS.border },
+        horzLines: { color: COLORS.border },
+      },
+      rightPriceScale: { borderColor: COLORS.border },
+      timeScale: { borderColor: COLORS.border, timeVisible: true, secondsVisible: false },
+    });
+
+    const series = chart.addSeries(AreaSeries, {
+      lineColor: COLORS.green,
+      topColor: "rgba(38, 166, 154, 0.35)",
+      bottomColor: "rgba(38, 166, 154, 0)",
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: true,
+    });
+    series.setData(candles.map((c) => ({ time: toUnixSeconds(c.timestamp), value: c.equity })));
+
+    series.createPriceLine({
+      price: initialCapital,
+      color: COLORS.faint,
+      lineWidth: 1,
+      lineStyle: 2, // dashed
+      axisLabelVisible: true,
+      title: "capital inicial",
+    });
+
+    chart.timeScale().fitContent();
+
+    return () => chart.remove();
+  }, [candles, initialCapital]);
 
   return (
     <div className="panel">
@@ -20,53 +54,7 @@ export default function EquityChart({ candles, initialCapital }) {
         <h2>Curva de equity</h2>
         <span className="text-dim panel__note">línea punteada = capital inicial</span>
       </div>
-      <ResponsiveContainer width="100%" height={220}>
-        <AreaChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-          <defs>
-            <linearGradient id="equityFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--green)" stopOpacity={0.35} />
-              <stop offset="100%" stopColor="var(--green)" stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
-          <XAxis
-            dataKey="x"
-            type="number"
-            domain={["dataMin", "dataMax"]}
-            tickFormatter={(v) => formatDateShort(new Date(v).toISOString())}
-            stroke="var(--text-faint)"
-            tick={{ fill: "var(--text-dim)", fontSize: 12 }}
-            minTickGap={40}
-          />
-          <YAxis
-            domain={["auto", "auto"]}
-            tickFormatter={(v) => formatUsd(v, 0)}
-            stroke="var(--text-faint)"
-            tick={{ fill: "var(--text-dim)", fontSize: 12 }}
-            width={72}
-          />
-          <Tooltip
-            contentStyle={{
-              background: "var(--surface-2)",
-              border: "1px solid var(--border)",
-              borderRadius: 8,
-              fontSize: 12,
-            }}
-            labelStyle={{ color: "var(--text-dim)" }}
-            labelFormatter={(v) => formatDateTime(new Date(v).toISOString())}
-            formatter={(value) => [formatUsd(value), "Equity"]}
-          />
-          <ReferenceLine y={initialCapital} stroke="var(--text-faint)" strokeDasharray="4 4" />
-          <Area
-            type="monotone"
-            dataKey="equity"
-            stroke="var(--green)"
-            fill="url(#equityFill)"
-            strokeWidth={2}
-            isAnimationActive={false}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
+      <div ref={containerRef} style={{ height: 240 }} />
     </div>
   );
 }

@@ -6,10 +6,17 @@ on Testnet: win rate, max drawdown, total return, number of trades.
 
 Assumptions (deliberate simplifications, worth knowing about):
   - Long-only, a single position at a time (no pyramiding, no shorting).
-  - Enters/exits at the *close* of the candle where the EMA crossover
-    happens, not the next candle's open. Real fills will differ
-    slightly — one reason testnet paper-trading still matters even
-    after a good backtest.
+  - Enters and exits-by-signal at the *close* of the candle where the
+    EMA crossover happens, not the next candle's open. Real fills will
+    differ slightly — one reason testnet paper-trading still matters
+    even after a good backtest.
+  - Every entry also sets a stop-loss at risk_manager.stop_loss_price(),
+    mirroring the real STOP_LOSS_LIMIT order main.py places on Testnet.
+    A trade closes on whichever comes first: the candle's *low*
+    touching that stop (filled at the stop price — real fills would
+    trail it slightly given the STOP_LOSS_LIMIT_SLIPPAGE_PCT buffer) or
+    the EMA crossing back (filled at that candle's close). No
+    take-profit is simulated, matching main.py --trade today.
   - A flat per-trade fee approximates Binance's spot taker fee so the
     backtest isn't unrealistically optimistic.
 """
@@ -19,6 +26,8 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
+from config import RISK_PER_TRADE_PCT, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+from risk_manager import stop_loss_price
 from strategy import FAST_PERIOD, SLOW_PERIOD, add_signals
 
 TAKER_FEE_PCT = 0.1  # Binance default spot taker fee, %
@@ -44,32 +53,64 @@ def _simulate(df: pd.DataFrame, initial_capital: float, fast: int = None, slow: 
     position = 0  # 0 = flat, 1 = long
     entry_price = 0.0
     entry_time = None
+    stop_price = None
     trades = []
     equity_curve = []
+    total_fees_paid = 0.0
 
     for timestamp, row in data.iterrows():
         price = row["close"]
+        low = row["low"]
         signal = row["signal"]
 
-        if position == 0 and signal == 1:
+        if position == 1 and stop_price is not None and low <= stop_price:
+            # Stop-loss triggers intra-candle: a resting order would
+            # have filled near the stop, before we'd even see this
+            # candle's close or its EMA-crossover signal.
+            exit_price = stop_price
+            capital *= exit_price / entry_price
+            fee = capital * TAKER_FEE_PCT / 100
+            capital -= fee
+            total_fees_paid += fee
+            trades.append(
+                {
+                    "entry_time": entry_time,
+                    "entry_price": float(entry_price),
+                    "exit_time": timestamp,
+                    "exit_price": float(exit_price),
+                    "return_pct": float((exit_price / entry_price - 1) * 100),
+                    "exit_reason": "stop_loss",
+                    "stop_loss_price": float(stop_price),
+                }
+            )
+            position = 0
+            stop_price = None
+        elif position == 0 and signal == 1:
             position = 1
             entry_price = price
             entry_time = timestamp
-            capital *= 1 - TAKER_FEE_PCT / 100
+            stop_price = stop_loss_price(entry_price)
+            fee = capital * TAKER_FEE_PCT / 100
+            capital -= fee
+            total_fees_paid += fee
         elif position == 1 and signal == 0:
-            trade_return = price / entry_price - 1
             capital *= price / entry_price
-            capital *= 1 - TAKER_FEE_PCT / 100
+            fee = capital * TAKER_FEE_PCT / 100
+            capital -= fee
+            total_fees_paid += fee
             trades.append(
                 {
                     "entry_time": entry_time,
                     "entry_price": float(entry_price),
                     "exit_time": timestamp,
                     "exit_price": float(price),
-                    "return_pct": float(trade_return * 100),
+                    "return_pct": float((price / entry_price - 1) * 100),
+                    "exit_reason": "signal",
+                    "stop_loss_price": float(stop_price),
                 }
             )
             position = 0
+            stop_price = None
 
         equity_curve.append(capital * (price / entry_price) if position == 1 else capital)
 
@@ -85,24 +126,40 @@ def _simulate(df: pd.DataFrame, initial_capital: float, fast: int = None, slow: 
             "initial_capital": initial_capital,
             "final_capital": initial_capital,
             "total_return_pct": 0.0,
+            "buy_hold_return_pct": 0.0,
             "num_trades": 0,
             "win_rate_pct": 0.0,
             "max_drawdown_pct": 0.0,
             "avg_trade_return_pct": 0.0,
+            "best_trade_pct": 0.0,
+            "worst_trade_pct": 0.0,
+            "stop_loss_exits": 0,
+            "signal_exits": 0,
+            "avg_trade_duration_hours": 0.0,
+            "total_fees_paid": 0.0,
         }
         return metrics, data, trades
 
     wins = [t for t in trades if t["return_pct"] > 0]
     trade_returns = [t["return_pct"] / 100 for t in trades]
+    durations_hours = [(t["exit_time"] - t["entry_time"]).total_seconds() / 3600 for t in trades]
+    buy_hold_return_pct = float(data["close"].iloc[-1] / data["close"].iloc[0] - 1) * 100
 
     metrics = {
         "initial_capital": initial_capital,
         "final_capital": float(data["equity"].iloc[-1]),
         "total_return_pct": float(data["equity"].iloc[-1] / initial_capital - 1) * 100,
+        "buy_hold_return_pct": buy_hold_return_pct,
         "num_trades": len(trades),
         "win_rate_pct": (len(wins) / len(trades) * 100) if trades else 0.0,
         "max_drawdown_pct": float(data["drawdown_pct"].min()),
         "avg_trade_return_pct": float(np.mean(trade_returns) * 100) if trade_returns else 0.0,
+        "best_trade_pct": float(max(t["return_pct"] for t in trades)) if trades else 0.0,
+        "worst_trade_pct": float(min(t["return_pct"] for t in trades)) if trades else 0.0,
+        "stop_loss_exits": sum(1 for t in trades if t["exit_reason"] == "stop_loss"),
+        "signal_exits": sum(1 for t in trades if t["exit_reason"] == "signal"),
+        "avg_trade_duration_hours": float(np.mean(durations_hours)) if durations_hours else 0.0,
+        "total_fees_paid": float(total_fees_paid),
     }
     return metrics, data, trades
 
@@ -133,7 +190,7 @@ def export_report(
     is_demo: bool = False,
 ) -> dict:
     """Run the backtest and write a JSON report the React dashboard reads:
-    metrics, per-candle close/EMA/signal/equity, and the trade list.
+    metrics, per-candle OHLC/EMA/signal/equity, and the trade list.
     Returns the same dict that's written to disk.
     """
     metrics, data, trades = _simulate(df, initial_capital, fast, slow)
@@ -141,6 +198,9 @@ def export_report(
     candles = [
         {
             "timestamp": ts.isoformat(),
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
             "close": float(row["close"]),
             "ema_fast": float(row["ema_fast"]),
             "ema_slow": float(row["ema_slow"]),
@@ -157,6 +217,17 @@ def export_report(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "is_demo": is_demo,
         "strategy": {"fast_ema": fast or FAST_PERIOD, "slow_ema": slow or SLOW_PERIOD},
+        "risk_management": {
+            "risk_per_trade_pct": RISK_PER_TRADE_PCT,
+            "stop_loss_pct": STOP_LOSS_PCT,
+            "take_profit_pct": TAKE_PROFIT_PCT,
+        },
+        "backtest_assumptions": {
+            "taker_fee_pct": TAKER_FEE_PCT,
+            "long_only": True,
+            "single_position": True,
+            "take_profit_simulated": False,
+        },
         "metrics": metrics,
         "candles": candles,
         "trades": [
@@ -166,6 +237,8 @@ def export_report(
                 "exit_time": t["exit_time"].isoformat(),
                 "exit_price": t["exit_price"],
                 "return_pct": t["return_pct"],
+                "exit_reason": t["exit_reason"],
+                "stop_loss_price": t["stop_loss_price"],
             }
             for t in trades
         ],

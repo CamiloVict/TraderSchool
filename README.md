@@ -87,21 +87,52 @@ npm install
 npm run dev
 ```
 
-Panel visual del backtest: KPIs (retorno, win rate, drawdown, # de
-operaciones), gráfico de precio con EMA 20/50 y marcadores de
-compra/venta, curva de equity, y tabla de operaciones. Ver
-`dashboard/README.md`.
+Panel visual del backtest, con gráfico de velas real (librería
+[lightweight-charts](https://tradingview.github.io/lightweight-charts/),
+de TradingView) en vez de un simple gráfico de líneas: KPIs (retorno
+vs. buy & hold, win rate, drawdown, mejor/peor operación, duración
+promedio, comisiones pagadas, cuántas salidas fueron por stop-loss vs.
+por señal), velas OHLC con EMA rápida/lenta y flechas de
+compra/venta/stop-loss, curva de equity, tabla de operaciones (con
+motivo de salida y duración), y un panel plegable "¿Cómo funciona esta
+estrategia?" que explica la lógica en lenguaje simple con los números
+reales del reporte cargado. Ver `dashboard/README.md`.
 
-Es un panel **estático**, no en vivo: lee `dashboard/public/data/backtest.json`,
-que genera `backtester.py`:
+Es un panel **estático**, no en vivo: lee un JSON generado por
+`backtester.py`:
 
 ```bash
 python backtester.py --export dashboard/public/data/backtest.json
 ```
 
-Ya incluye un `backtest.json` de ejemplo con datos sintéticos (marcado
-como demo en el propio dashboard) para que no se vea vacío hasta que
-corras el backtest con datos reales del testnet.
+El backtest ahora simula el mismo stop-loss real que corre en Testnet:
+una operación se cierra por lo que ocurra primero, el precio tocando
+el stop o la EMA cruzando de vuelta — no solo por el cruce de EMA como
+antes. Si ya tenías un `backtest.json`/`backtest_paxg.json` generado
+con una versión anterior de `backtester.py`, el dashboard lo sigue
+mostrando (con datos degradados: velas sin mecha, sin distinguir
+motivo de salida) — regeneralo para ver el detalle completo.
+
+**Para comparar varios símbolos** (por ejemplo BTC y oro/PAXG) en el
+mismo dashboard, exportá cada uno a un archivo distinto y agregalo a
+`dashboard/public/data/reports.json`:
+
+```bash
+python backtester.py --export dashboard/public/data/backtest.json          # BTC (SYMBOL del .env)
+SYMBOL="PAXG/USDT" python backtester.py --export dashboard/public/data/backtest_paxg.json
+```
+
+```json
+[
+  { "label": "BTC/USDT", "file": "backtest.json" },
+  { "label": "PAXG/USDT (oro)", "file": "backtest_paxg.json" }
+]
+```
+
+El dashboard muestra un selector arriba a la derecha cuando hay más de
+un reporte listado. Ya incluye datos de ejemplo sintéticos para ambos
+(marcados como demo en el propio dashboard) para que no se vea vacío
+hasta que corras tus propios backtests.
 
 ## Estado del proyecto
 
@@ -110,17 +141,24 @@ corras el backtest con datos reales del testnet.
 - [x] `main.py`: verificación de conexión (`python main.py`) y ciclo de
   trading en testnet (`python main.py --trade`)
 - [x] `strategy.py`: cruce de EMA 20/50, long-only
-- [x] `backtester.py`: simulación + métricas (retorno, win rate, drawdown)
-  y exportación a JSON para el dashboard (`--export`)
+- [x] `backtester.py`: simulación (con el mismo stop-loss real que usa
+  `main.py --trade`) + métricas (retorno vs. buy & hold, win rate,
+  drawdown, comisiones, duración de operaciones) y exportación a JSON
+  para el dashboard (`--export`)
 - [x] `risk_manager.py`: tamaño de posición por % de riesgo, precios de
   stop-loss/take-profit, límite de pérdida diaria (`DailyLossTracker`)
 - [x] `executor.py`: órdenes de mercado y stop-loss real
   (`STOP_LOSS_LIMIT`) en Testnet, bloqueadas si `USE_TESTNET` es `False`
-- [x] `dashboard/`: panel React (Vite) para visualizar resultados del backtest
+- [x] `dashboard/`: panel React (Vite) con gráfico de velas real
+  (lightweight-charts), selector de reportes (multi-símbolo) y panel
+  explicativo de la estrategia
 - [x] `test_trading_cycle.py`: tests offline (sin red) del ciclo de
   trading contra un exchange falso — compra + coloca stop, cancela el
-  stop antes de vender por señal, reconstruye un stop faltante. Correr
-  con `python -m unittest test_trading_cycle -v`
+  stop antes de vender por señal, reconstruye un stop faltante.
+- [x] `test_backtester.py`: tests de la simulación del stop-loss en el
+  backtest (sale por stop aunque la señal siga alcista; sale por señal
+  si el stop nunca se toca). Correr ambos con
+  `python -m unittest test_trading_cycle test_backtester -v`
 
 ## Decisiones tomadas hasta ahora
 

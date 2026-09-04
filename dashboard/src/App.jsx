@@ -2,28 +2,48 @@ import { useEffect, useState } from "react";
 
 import EquityChart from "./components/EquityChart";
 import KpiCard from "./components/KpiCard";
-import PriceChart from "./components/PriceChart";
+import StrategyExplainer from "./components/StrategyExplainer";
 import TradesTable from "./components/TradesTable";
-import { downsample, formatDateTime, formatPct, formatUsd } from "./lib/format";
+import TradingChart from "./components/TradingChart";
+import { formatDateTime, formatHours, formatPct, formatUsd } from "./lib/format";
 
 import "./App.css";
 
-const DATA_URL = "/data/backtest.json";
-const CHART_MAX_POINTS = 600;
+const DATA_DIR = "/data";
+const REPORTS_MANIFEST_URL = `${DATA_DIR}/reports.json`;
+// Falls back to this single entry if reports.json is missing, so a
+// dashboard set up before the manifest existed still works.
+const DEFAULT_REPORTS = [{ label: "Backtest", file: "backtest.json" }];
 
 export default function App() {
+  const [reports, setReports] = useState(DEFAULT_REPORTS);
+  const [selectedFile, setSelectedFile] = useState(DEFAULT_REPORTS[0].file);
   const [report, setReport] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetch(DATA_URL)
+    fetch(REPORTS_MANIFEST_URL)
+      .then((res) => (res.ok ? res.json() : DEFAULT_REPORTS))
+      .catch(() => DEFAULT_REPORTS)
+      .then((list) => {
+        const safeList = Array.isArray(list) && list.length ? list : DEFAULT_REPORTS;
+        setReports(safeList);
+        setSelectedFile(safeList[0].file);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!selectedFile) return;
+    setReport(null);
+    setError(null);
+    fetch(`${DATA_DIR}/${selectedFile}`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
       .then(setReport)
       .catch((err) => setError(err.message));
-  }, []);
+  }, [selectedFile]);
 
   if (error) {
     return (
@@ -31,10 +51,11 @@ export default function App() {
         <div className="panel">
           <h2>No se pudo cargar el reporte</h2>
           <p className="text-dim">
-            No encontré <code>{DATA_URL}</code>. Generalo corriendo, desde la raíz del proyecto:
+            No encontré <code>{DATA_DIR}/{selectedFile}</code>. Generalo corriendo, desde la raíz
+            del proyecto:
           </p>
           <pre className="code-block">
-            python backtester.py --export dashboard/public/data/backtest.json
+            python backtester.py --export dashboard/public{DATA_DIR}/{selectedFile}
           </pre>
         </div>
       </div>
@@ -49,8 +70,18 @@ export default function App() {
     );
   }
 
-  const { metrics, candles, trades, symbol, timeframe, strategy, generated_at, is_demo } = report;
-  const chartCandles = downsample(candles, CHART_MAX_POINTS);
+  const {
+    metrics,
+    candles,
+    trades,
+    symbol,
+    timeframe,
+    strategy,
+    risk_management: riskManagement,
+    backtest_assumptions: backtestAssumptions,
+    generated_at,
+    is_demo,
+  } = report;
 
   return (
     <div className="app-shell">
@@ -62,13 +93,38 @@ export default function App() {
             {formatDateTime(generated_at)}
           </p>
         </div>
-        {is_demo && <span className="badge badge--demo">DATOS DEMO (sintéticos)</span>}
+        <div className="app-header__actions">
+          {is_demo && <span className="badge badge--demo">DATOS DEMO (sintéticos)</span>}
+          {reports.length > 1 && (
+            <select
+              className="report-select"
+              value={selectedFile}
+              onChange={(e) => setSelectedFile(e.target.value)}
+              aria-label="Elegir backtest"
+            >
+              {reports.map((r) => (
+                <option key={r.file} value={r.file}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
       </header>
+
+      <StrategyExplainer
+        symbol={symbol}
+        timeframe={timeframe}
+        strategy={strategy}
+        riskManagement={riskManagement}
+        backtestAssumptions={backtestAssumptions}
+      />
 
       <section className="kpi-grid">
         <KpiCard
           label="Retorno total"
           value={formatPct(metrics.total_return_pct)}
+          sublabel={`buy & hold: ${formatPct(metrics.buy_hold_return_pct)}`}
           tone={metrics.total_return_pct >= 0 ? "positive" : "negative"}
         />
         <KpiCard
@@ -82,21 +138,44 @@ export default function App() {
           tone={metrics.win_rate_pct >= 50 ? "positive" : "neutral"}
         />
         <KpiCard label="Drawdown máximo" value={formatPct(metrics.max_drawdown_pct)} tone="negative" />
-        <KpiCard label="Operaciones" value={metrics.num_trades} />
+        <KpiCard
+          label="Operaciones"
+          value={metrics.num_trades}
+          sublabel={
+            metrics.stop_loss_exits != null
+              ? `${metrics.signal_exits} por señal · ${metrics.stop_loss_exits} por stop-loss`
+              : undefined
+          }
+        />
         <KpiCard
           label="Retorno prom. / operación"
           value={formatPct(metrics.avg_trade_return_pct)}
           tone={metrics.avg_trade_return_pct >= 0 ? "positive" : "negative"}
         />
+        <KpiCard
+          label="Mejor / peor operación"
+          value={`${formatPct(metrics.best_trade_pct)} / ${formatPct(metrics.worst_trade_pct)}`}
+        />
+        <KpiCard label="Duración prom. posición" value={formatHours(metrics.avg_trade_duration_hours)} />
+        <KpiCard
+          label="Comisiones pagadas"
+          value={formatUsd(metrics.total_fees_paid)}
+          sublabel={
+            backtestAssumptions?.taker_fee_pct != null
+              ? `${backtestAssumptions.taker_fee_pct}% por operación`
+              : undefined
+          }
+        />
       </section>
 
-      <PriceChart candles={chartCandles} trades={trades} />
-      <EquityChart candles={chartCandles} initialCapital={metrics.initial_capital} />
+      <TradingChart candles={candles} trades={trades} />
+      <EquityChart candles={candles} initialCapital={metrics.initial_capital} />
       <TradesTable trades={trades} />
 
       <footer className="app-footer text-dim">
-        Resultado de backtest, no es consejo financiero. Simulación long-only, comisión 0.1% por
-        operación, sin slippage — el desempeño en testnet/real puede diferir.
+        Resultado de backtest, no es consejo financiero. Simulación long-only con stop-loss real,
+        comisión {backtestAssumptions?.taker_fee_pct ?? 0.1}% por operación, sin slippage — el
+        desempeño en testnet/real puede diferir.
       </footer>
     </div>
   );
