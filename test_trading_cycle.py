@@ -162,7 +162,7 @@ class RunTradingCycleTests(unittest.TestCase):
 
         always_bearish = lambda data, *a, **k: pd.Series(-1, index=data.index)
         with patch("main.USE_PATTERN_FILTER", True), patch(
-            "main.detect_double_patterns", side_effect=always_bearish
+            "main.detect_reversal_patterns", side_effect=always_bearish
         ):
             result = main.run_trading_cycle(exchange)
 
@@ -173,7 +173,7 @@ class RunTradingCycleTests(unittest.TestCase):
         candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
         exchange = FakeExchange(candles, free={"USDT": 1000.0})
 
-        with patch("main.USE_PATTERN_FILTER", False), patch("main.detect_double_patterns") as mock_detect:
+        with patch("main.USE_PATTERN_FILTER", False), patch("main.detect_reversal_patterns") as mock_detect:
             result = main.run_trading_cycle(exchange)
 
         mock_detect.assert_not_called()

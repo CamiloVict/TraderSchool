@@ -70,7 +70,7 @@ class SimulateStopLossTests(unittest.TestCase):
 class PatternFilterWiringTests(unittest.TestCase):
     """Verifies _simulate() actually wires the pattern veto into the
     entry check. patterns.py's own detection logic is covered by
-    test_patterns.py — here detect_double_patterns is stubbed so the
+    test_patterns.py — here detect_reversal_patterns is stubbed so the
     test is only about whether _simulate() honors it."""
 
     def test_confirmed_double_top_blocks_every_entry(self):
@@ -79,7 +79,7 @@ class PatternFilterWiringTests(unittest.TestCase):
         df = make_df(warmup + rise)
 
         always_bearish = lambda data, *a, **k: pd.Series(-1, index=data.index)
-        with patch("backtester.detect_double_patterns", side_effect=always_bearish):
+        with patch("backtester.detect_reversal_patterns", side_effect=always_bearish):
             _, data, trades = backtester._simulate(df, initial_capital=1000.0, use_pattern_filter=True)
 
         self.assertEqual(trades, [])
@@ -90,7 +90,7 @@ class PatternFilterWiringTests(unittest.TestCase):
         rise = [100.0 + i for i in range(1, 31)]
         df = make_df(warmup + rise)
 
-        with patch("backtester.detect_double_patterns") as mock_detect:
+        with patch("backtester.detect_reversal_patterns") as mock_detect:
             _, data, _ = backtester._simulate(df, initial_capital=1000.0, use_pattern_filter=False)
 
         mock_detect.assert_not_called()

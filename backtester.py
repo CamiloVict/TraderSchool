@@ -20,9 +20,10 @@ Assumptions (deliberate simplifications, worth knowing about):
   - A flat per-trade fee approximates Binance's spot taker fee so the
     backtest isn't unrealistically optimistic.
   - `use_pattern_filter=True` (or CLI `--pattern-filter`) turns on the
-    double-top/double-bottom confirmation filter from patterns.py: a
-    confirmed double-top blocks a new EMA-crossover entry for a while.
-    Off by default — it's an opt-in experiment, not a validated edge.
+    reversal-pattern confirmation filter from patterns.py (double-top/
+    bottom, head-and-shoulders/inverse): a confirmed bearish pattern
+    blocks a new EMA-crossover entry for a while. Off by default —
+    it's an opt-in experiment, not a validated edge.
 """
 import json
 from datetime import datetime, timezone
@@ -31,7 +32,7 @@ import numpy as np
 import pandas as pd
 
 from config import RISK_PER_TRADE_PCT, STOP_LOSS_PCT, TAKE_PROFIT_PCT
-from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_double_patterns
+from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
 from risk_manager import stop_loss_price
 from strategy import FAST_PERIOD, SLOW_PERIOD, add_signals
 
@@ -47,10 +48,11 @@ def _simulate(
 ):
     """Core simulation loop, shared by run_backtest() and export_report().
 
-    `use_pattern_filter`: opt-in double-top/double-bottom confirmation
-    filter (see patterns.py) — a confirmed double-top blocks new
-    EMA-crossover entries for PATTERN_VETO_LOOKBACK candles. It only
-    gates entries; exits (signal or stop-loss) are unaffected.
+    `use_pattern_filter`: opt-in reversal-pattern confirmation filter
+    (see patterns.py) — a confirmed bearish pattern (double-top,
+    head-and-shoulders) blocks new EMA-crossover entries for
+    PATTERN_VETO_LOOKBACK candles. It only gates entries; exits
+    (signal or stop-loss) are unaffected.
 
     Returns (metrics: dict, data: DataFrame with equity/drawdown columns
     added, trades: list of per-trade dicts).
@@ -66,7 +68,7 @@ def _simulate(
     data = data.iloc[warmup:].copy()
 
     if use_pattern_filter:
-        data["pattern_signal"] = detect_double_patterns(data)
+        data["pattern_signal"] = detect_reversal_patterns(data)
         entry_blocked = bearish_veto_mask(data["pattern_signal"], PATTERN_VETO_LOOKBACK)
     else:
         data["pattern_signal"] = 0
@@ -307,9 +309,9 @@ if __name__ == "__main__":
         "--pattern-filter",
         action="store_true",
         help=(
-            "Opt-in double-top/double-bottom confirmation filter (see patterns.py): "
-            "blocks a new EMA-crossover entry for a while after a bearish double-top "
-            "confirms. Off by default."
+            "Opt-in reversal-pattern confirmation filter (see patterns.py): "
+            "blocks a new EMA-crossover entry for a while after a bearish "
+            "double-top or head-and-shoulders confirms. Off by default."
         ),
     )
     args = parser.parse_args()

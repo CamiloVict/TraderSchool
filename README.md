@@ -93,15 +93,26 @@ lo verifica antes de cada orden y lanza `LiveTradingDisabledError` si no.
 python backtester.py --source real --days 365 --pattern-filter
 ```
 
-Detecta patrones clásicos de doble techo / doble piso (dos picos o
-valles a precio similar, separados por un retroceso significativo, con
-ruptura confirmada del nivel intermedio) y los usa como **veto sobre
-las entradas** de la EMA: un doble techo confirmado bloquea una nueva
+Detecta patrones clásicos de reversión — doble techo/piso (dos picos o
+valles a precio similar, separados por un retroceso significativo) y
+hombro-cabeza-hombro/invertido (tres picos donde el del medio es más
+alto, hombros a nivel similar) — y los usa como **veto sobre las
+entradas** de la EMA: un patrón bajista confirmado bloquea una nueva
 entrada por `PATTERN_VETO_LOOKBACK` velas, aunque la EMA acabe de
 cruzar hacia arriba. No genera operaciones propias, no toca las
 salidas (esas siguen siendo el cruce de EMA o el stop-loss) — es
 puramente un filtro de confirmación, apagado por defecto
 (`USE_PATTERN_FILTER=false` en `.env`).
+
+Los pivotes (picos/valles) se detectan reusando
+`context_engine.structure.find_swings` en vez de reimplementar la
+lógica: esa función ya resuelve algo que una primera versión de este
+módulo tenía mal — un patrón no puede confirmarse en una vela anterior
+a que su último pivote (el hombro derecho, el segundo pico/valle)
+esté realmente confirmado (`confirmed_at`), aunque el precio ya
+hubiera roto el nivel de ruptura antes de eso. Confirmar antes es
+exactamente el look-ahead que el propio `context_engine` señala como
+el bug más peligroso de este tipo de código.
 
 **Por qué está limitado a esto y no a "modelos predictivos":** los
 patrones de chart (hombro-cabeza-hombro, doble techo, triángulos,
@@ -114,9 +125,10 @@ estudios en velas de 1 minuto que sí parecían prometedores (Miller et
 al. 2019, Corbet et al. 2019) resultan no rentables en cuanto se
 descuentan comisiones reales (Resta et al. 2020, Frömmel & Deprez
 2024). Por eso: patrón como veto sobre una entrada ya validada por
-EMA, no como estrategia propia — y solo doble techo/piso por ahora,
-el patrón más simple de detectar de forma confiable. H&S y triángulos
-quedan para después si este primer paso resulta útil en el backtest.
+EMA, no como estrategia propia. Triángulos quedan pendientes —
+requieren ajustar rectas de tendencia sobre una secuencia de pivotes en
+vez de comparar solo dos o tres, bastante más trabajo de geometría que
+doble techo/piso y H&S.
 
 ## Daily Market Context Engine (`context_engine/`)
 
@@ -348,8 +360,10 @@ del dashboard.
 - [x] `dashboard/`: panel React (Vite) con gráfico de velas real
   (lightweight-charts), selector de reportes (multi-símbolo) y panel
   explicativo de la estrategia
-- [x] `patterns.py`: filtro de confirmación por doble techo/piso sobre
-  las entradas de EMA, opt-in (`USE_PATTERN_FILTER` / `--pattern-filter`)
+- [x] `patterns.py`: filtro de confirmación por doble techo/piso y
+  hombro-cabeza-hombro/invertido sobre las entradas de EMA, opt-in
+  (`USE_PATTERN_FILTER` / `--pattern-filter`), reusando los swings
+  look-ahead-safe de `context_engine.structure`
 - [x] `test_trading_cycle.py`: tests offline (sin red) del ciclo de
   trading contra un exchange falso — compra + coloca stop, cancela el
   stop antes de vender por señal, reconstruye un stop faltante, filtro
@@ -357,9 +371,12 @@ del dashboard.
 - [x] `test_backtester.py`: tests de la simulación del stop-loss (sale
   por stop aunque la señal siga alcista; sale por señal si el stop
   nunca se toca) y del cableado del filtro de patrones.
-- [x] `test_patterns.py`: tests de la detección de doble techo/piso y
-  del veto temporal sobre entradas. Correr los tres con
-  `python -m unittest test_trading_cycle test_backtester test_patterns -v`
+- [x] `test_patterns.py`: tests de la detección de doble techo/piso,
+  H&S/invertido, el veto temporal sobre entradas, y que ningún patrón
+  confirma antes de que su último pivote esté realmente confirmado.
+  Correr los cuatro con
+  `python -m unittest test_trading_cycle test_backtester test_patterns test_context_engine -v`
+  (o toda la suite del repo con `python -m unittest discover`)
 - [x] `context_engine/`: motor determinista de contexto diario
   (validación de datos, estructura, liquidez, volatilidad, sesiones,
   rango, bias multi-timeframe, régimen y score versionado), con CLI

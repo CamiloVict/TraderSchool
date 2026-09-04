@@ -25,16 +25,17 @@ deliberately: no take-profit order is placed (risk_manager.take_profit_price()
 is computed but unused) — exits on a favorable move still wait for the
 EMA to cross back, not a fixed target.
 
-If config.USE_PATTERN_FILTER is on, a newly-confirmed bearish
-double-top (see patterns.py) blocks a new EMA-crossover entry — it's
-purely a veto on entries, never an extra exit trigger.
+If config.USE_PATTERN_FILTER is on, a newly-confirmed bearish reversal
+pattern — double-top or head-and-shoulders (see patterns.py) — blocks
+a new EMA-crossover entry. It's purely a veto on entries, never an
+extra exit trigger.
 """
 import argparse
 import sys
 
 from config import BINANCE_API_KEY, SYMBOL, TIMEFRAME, USE_PATTERN_FILTER, USE_TESTNET
 from data_fetcher import fetch_ohlcv, get_exchange
-from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_double_patterns
+from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
 from strategy import SLOW_PERIOD, add_signals
 
 
@@ -109,7 +110,7 @@ def run_trading_cycle(exchange=None) -> dict:
 
     entry_blocked_by_pattern = False
     if USE_PATTERN_FILTER and signal == 1 and not in_position:
-        pattern_signal = detect_double_patterns(data)
+        pattern_signal = detect_reversal_patterns(data)
         entry_blocked_by_pattern = bool(
             bearish_veto_mask(pattern_signal, PATTERN_VETO_LOOKBACK).iloc[-1]
         )
