@@ -93,16 +93,20 @@ lo verifica antes de cada orden y lanza `LiveTradingDisabledError` si no.
 python backtester.py --source real --days 365 --pattern-filter
 ```
 
-Detecta patrones clásicos de reversión — doble techo/piso (dos picos o
-valles a precio similar, separados por un retroceso significativo) y
-hombro-cabeza-hombro/invertido (tres picos donde el del medio es más
-alto, hombros a nivel similar) — y los usa como **veto sobre las
-entradas** de la EMA: un patrón bajista confirmado bloquea una nueva
-entrada por `PATTERN_VETO_LOOKBACK` velas, aunque la EMA acabe de
-cruzar hacia arriba. No genera operaciones propias, no toca las
-salidas (esas siguen siendo el cruce de EMA o el stop-loss) — es
-puramente un filtro de confirmación, apagado por defecto
-(`USE_PATTERN_FILTER=false` en `.env`).
+Detecta patrones clásicos de reversión/continuación — doble techo/piso
+(dos picos o valles a precio similar, separados por un retroceso
+significativo), hombro-cabeza-hombro/invertido (tres picos donde el
+del medio es más alto, hombros a nivel similar), y triángulos
+(ascendente, descendente, simétrico: dos rectas de tendencia
+ajustadas sobre los dos últimos picos y los dos últimos valles) — y
+los usa como **veto sobre las entradas** de la EMA: un patrón bajista
+confirmado (doble techo, H&S, triángulo descendente, o un simétrico
+rompiendo hacia abajo) bloquea una nueva entrada por
+`PATTERN_VETO_LOOKBACK` velas, aunque la EMA acabe de cruzar hacia
+arriba. No genera operaciones propias, no toca las salidas (esas
+siguen siendo el cruce de EMA o el stop-loss) — es puramente un
+filtro de confirmación, apagado por defecto (`USE_PATTERN_FILTER=false`
+en `.env`).
 
 Los pivotes (picos/valles) se detectan reusando
 `context_engine.structure.find_swings` en vez de reimplementar la
@@ -113,6 +117,20 @@ esté realmente confirmado (`confirmed_at`), aunque el precio ya
 hubiera roto el nivel de ruptura antes de eso. Confirmar antes es
 exactamente el look-ahead que el propio `context_engine` señala como
 el bug más peligroso de este tipo de código.
+
+**Sobre los triángulos, dos detalles no obvios:**
+- Una recta "plana" dentro de tolerancia es fácil de cumplir por
+  puro ruido si no se exige que las dos rectas arranquen realmente
+  separadas — por eso el triángulo pasa por el mismo filtro de
+  profundidad mínima (`min_depth_pct`) que doble techo/piso y H&S,
+  medido como la distancia entre ambas rectas al inicio del patrón.
+- El escaneo compara cada par de picos consecutivos contra cada par
+  de valles consecutivos (no solo los más recientes de cada lado),
+  porque en un triángulo real los picos y valles se intercalan en el
+  tiempo — al principio esto corría en ~14s sobre un año de velas 1h
+  por recalcular la posición de cada pivote con `DataFrame.index.get_loc()`
+  en cada iteración; precalcular esas posiciones en un dict lo bajó a
+  <1s sin cambiar el resultado.
 
 **Por qué está limitado a esto y no a "modelos predictivos":** los
 patrones de chart (hombro-cabeza-hombro, doble techo, triángulos,
@@ -125,10 +143,7 @@ estudios en velas de 1 minuto que sí parecían prometedores (Miller et
 al. 2019, Corbet et al. 2019) resultan no rentables en cuanto se
 descuentan comisiones reales (Resta et al. 2020, Frömmel & Deprez
 2024). Por eso: patrón como veto sobre una entrada ya validada por
-EMA, no como estrategia propia. Triángulos quedan pendientes —
-requieren ajustar rectas de tendencia sobre una secuencia de pivotes en
-vez de comparar solo dos o tres, bastante más trabajo de geometría que
-doble techo/piso y H&S.
+EMA, no como estrategia propia.
 
 ## Daily Market Context Engine (`context_engine/`)
 
@@ -360,10 +375,11 @@ del dashboard.
 - [x] `dashboard/`: panel React (Vite) con gráfico de velas real
   (lightweight-charts), selector de reportes (multi-símbolo) y panel
   explicativo de la estrategia
-- [x] `patterns.py`: filtro de confirmación por doble techo/piso y
-  hombro-cabeza-hombro/invertido sobre las entradas de EMA, opt-in
-  (`USE_PATTERN_FILTER` / `--pattern-filter`), reusando los swings
-  look-ahead-safe de `context_engine.structure`
+- [x] `patterns.py`: filtro de confirmación por doble techo/piso,
+  hombro-cabeza-hombro/invertido y triángulos (ascendente/descendente/
+  simétrico) sobre las entradas de EMA, opt-in (`USE_PATTERN_FILTER` /
+  `--pattern-filter`), reusando los swings look-ahead-safe de
+  `context_engine.structure`
 - [x] `test_trading_cycle.py`: tests offline (sin red) del ciclo de
   trading contra un exchange falso — compra + coloca stop, cancela el
   stop antes de vender por señal, reconstruye un stop faltante, filtro
@@ -372,8 +388,10 @@ del dashboard.
   por stop aunque la señal siga alcista; sale por señal si el stop
   nunca se toca) y del cableado del filtro de patrones.
 - [x] `test_patterns.py`: tests de la detección de doble techo/piso,
-  H&S/invertido, el veto temporal sobre entradas, y que ningún patrón
-  confirma antes de que su último pivote esté realmente confirmado.
+  H&S/invertido, los tres triángulos, el veto temporal sobre entradas,
+  que ningún patrón confirma antes de que su último pivote esté
+  realmente confirmado, y una cota de falsos positivos sobre ruido
+  (no promete cero, acota la tasa contra la que se vio en BTC real).
   Correr los cuatro con
   `python -m unittest test_trading_cycle test_backtester test_patterns test_context_engine -v`
   (o toda la suite del repo con `python -m unittest discover`)

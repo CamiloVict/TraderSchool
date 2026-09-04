@@ -26,9 +26,9 @@ is computed but unused) — exits on a favorable move still wait for the
 EMA to cross back, not a fixed target.
 
 If config.USE_PATTERN_FILTER is on, a newly-confirmed bearish reversal
-pattern — double-top or head-and-shoulders (see patterns.py) — blocks
-a new EMA-crossover entry. It's purely a veto on entries, never an
-extra exit trigger.
+pattern — double-top, head-and-shoulders, or triangle (see
+patterns.py) — blocks a new EMA-crossover entry. It's purely a veto on
+entries, never an extra exit trigger.
 """
 import argparse
 import sys

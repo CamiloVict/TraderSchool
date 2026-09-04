@@ -21,9 +21,9 @@ Assumptions (deliberate simplifications, worth knowing about):
     backtest isn't unrealistically optimistic.
   - `use_pattern_filter=True` (or CLI `--pattern-filter`) turns on the
     reversal-pattern confirmation filter from patterns.py (double-top/
-    bottom, head-and-shoulders/inverse): a confirmed bearish pattern
-    blocks a new EMA-crossover entry for a while. Off by default —
-    it's an opt-in experiment, not a validated edge.
+    bottom, head-and-shoulders/inverse, triangles): a confirmed
+    bearish pattern blocks a new EMA-crossover entry for a while. Off
+    by default — it's an opt-in experiment, not a validated edge.
 """
 import json
 from datetime import datetime, timezone
@@ -50,9 +50,9 @@ def _simulate(
 
     `use_pattern_filter`: opt-in reversal-pattern confirmation filter
     (see patterns.py) — a confirmed bearish pattern (double-top,
-    head-and-shoulders) blocks new EMA-crossover entries for
-    PATTERN_VETO_LOOKBACK candles. It only gates entries; exits
-    (signal or stop-loss) are unaffected.
+    head-and-shoulders, descending/symmetric triangle) blocks new
+    EMA-crossover entries for PATTERN_VETO_LOOKBACK candles. It only
+    gates entries; exits (signal or stop-loss) are unaffected.
 
     Returns (metrics: dict, data: DataFrame with equity/drawdown columns
     added, trades: list of per-trade dicts).
@@ -311,7 +311,7 @@ if __name__ == "__main__":
         help=(
             "Opt-in reversal-pattern confirmation filter (see patterns.py): "
             "blocks a new EMA-crossover entry for a while after a bearish "
-            "double-top or head-and-shoulders confirms. Off by default."
+            "double-top, head-and-shoulders, or triangle confirms. Off by default."
         ),
     )
     args = parser.parse_args()
