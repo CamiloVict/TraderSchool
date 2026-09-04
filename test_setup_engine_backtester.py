@@ -11,6 +11,7 @@ pieces are individually right" and "they're wired together correctly".
 
 Run with: python -m unittest test_setup_engine_backtester -v
 """
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -223,6 +224,46 @@ class PnLTests(unittest.TestCase):
         self.assertEqual(trades[0]["exit_reason"], "bias_flip")
         self.assertEqual(metrics["signal_exits"], 1)
         self.assertEqual(metrics["stop_loss_exits"], 0)
+
+
+class SnapshotEnrichmentTests(unittest.TestCase):
+    """The dashboard's TradingChart/EquityChart expect OHLC + equity on
+    every "candle" it plots — this locks in that simulate_setup_engine
+    actually adds those fields (and in the right order) rather than only
+    exposing market_state/bias/setups, and that export_report surfaces
+    them under the same `candles` key the EMA report uses."""
+
+    def test_snapshots_carry_ohlc_and_equity_matching_the_underlying_candle(self):
+        history = make_history_df(30, start_price=10000.0, step=1.0)  # closes: 10000, 10001, ...
+
+        with patch("setup_engine_backtester.build_timeframe_set", return_value={}), patch(
+            "setup_engine_backtester.build_context", return_value=make_snapshot()
+        ):
+            _, _, snapshots = seb.simulate_setup_engine(history, context_window_days=1, timeframe="1h")
+
+        window = 24  # context_window_days=1 -> 24 hourly candles
+        first = snapshots[0]
+        row = history.iloc[window]
+        self.assertEqual(first["open"], float(row["open"]))
+        self.assertEqual(first["high"], float(row["high"]))
+        self.assertEqual(first["low"], float(row["low"]))
+        self.assertEqual(first["close"], float(row["close"]))
+        self.assertIn("equity", first)
+        self.assertIn("drawdown_pct", first)
+
+    def test_export_report_writes_the_enriched_snapshots_under_candles(self):
+        history = make_history_df(30, start_price=10000.0, step=0.0)
+
+        with tempfile.NamedTemporaryFile(suffix=".json") as tmp:
+            with patch("setup_engine_backtester.build_timeframe_set", return_value={}), patch(
+                "setup_engine_backtester.build_context", return_value=make_snapshot()
+            ):
+                report = seb.export_report(history, tmp.name, context_window_days=1, timeframe="1h")
+
+        self.assertNotIn("snapshots", report)
+        self.assertIn("candles", report)
+        self.assertIn("open", report["candles"][0])
+        self.assertIn("market_state", report["candles"][0])
 
 
 class RealEndToEndSmokeTest(unittest.TestCase):

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import EquityChart from "./components/EquityChart";
 import KpiCard from "./components/KpiCard";
 import MarketContext from "./components/MarketContext";
+import SetupEngineExplainer from "./components/SetupEngineExplainer";
 import StrategyExplainer from "./components/StrategyExplainer";
 import TradesTable from "./components/TradesTable";
 import TradingChart from "./components/TradingChart";
@@ -96,11 +97,15 @@ export default function App() {
     symbol,
     timeframe,
     strategy,
+    engine,
+    context_window_days: contextWindowDays,
     risk_management: riskManagement,
     backtest_assumptions: backtestAssumptions,
     generated_at,
     is_demo,
   } = report;
+
+  const isSetupEngine = engine === "setup_engine";
 
   return (
     <div className="app-shell">
@@ -108,8 +113,11 @@ export default function App() {
         <div>
           <h1>Trading Bot Dashboard</h1>
           <p className="text-dim">
-            {symbol} · {timeframe} · EMA {strategy.fast_ema}/{strategy.slow_ema} · generado{" "}
-            {formatDateTime(generated_at)}
+            {symbol} · {timeframe} ·{" "}
+            {isSetupEngine
+              ? `Setup Engine (ventana ${contextWindowDays ?? "?"}d)`
+              : `EMA ${strategy.fast_ema}/${strategy.slow_ema}`}{" "}
+            · generado {formatDateTime(generated_at)}
           </p>
         </div>
         <div className="app-header__actions">
@@ -133,13 +141,23 @@ export default function App() {
 
       <MarketContext context={context} />
 
-      <StrategyExplainer
-        symbol={symbol}
-        timeframe={timeframe}
-        strategy={strategy}
-        riskManagement={riskManagement}
-        backtestAssumptions={backtestAssumptions}
-      />
+      {isSetupEngine ? (
+        <SetupEngineExplainer
+          symbol={symbol}
+          timeframe={timeframe}
+          contextWindowDays={contextWindowDays}
+          riskManagement={riskManagement}
+          backtestAssumptions={backtestAssumptions}
+        />
+      ) : (
+        <StrategyExplainer
+          symbol={symbol}
+          timeframe={timeframe}
+          strategy={strategy}
+          riskManagement={riskManagement}
+          backtestAssumptions={backtestAssumptions}
+        />
+      )}
 
       <section className="kpi-grid">
         <KpiCard

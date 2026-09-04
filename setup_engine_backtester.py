@@ -162,6 +162,23 @@ def simulate_setup_engine(
     running_max = equity.cummax()
     drawdown_pct = (equity - running_max) / running_max * 100
 
+    # OHLC + equity/drawdown per tested candle, added after the fact
+    # rather than inside the loop above: `equity`/`drawdown_pct` are
+    # only knowable as full series (drawdown needs the running max over
+    # everything seen so far), and this list is already in the same
+    # order as `tested_index`. This is what lets the dashboard plot a
+    # setup-engine report with the same TradingChart/EquityChart
+    # components used for the EMA report, which expect OHLC + equity on
+    # every "candle".
+    for offset, snapshot in enumerate(snapshots):
+        row = history.iloc[window + offset]
+        snapshot["open"] = float(row["open"])
+        snapshot["high"] = float(row["high"])
+        snapshot["low"] = float(row["low"])
+        snapshot["close"] = float(row["close"])
+        snapshot["equity"] = float(equity_curve[offset])
+        snapshot["drawdown_pct"] = float(drawdown_pct.iloc[offset])
+
     metrics = compute_metrics(close, equity, drawdown_pct, trades, initial_capital, total_fees_paid)
     return metrics, trades, snapshots
 
@@ -176,10 +193,11 @@ def export_report(
     is_demo: bool = False,
 ) -> dict:
     """Run the Setup Engine backtest and write a JSON report — same
-    metrics/trades shape as backtester.export_report's, plus a
-    `snapshots` list (market_state/bias/setups per tested candle) in
-    place of the EMA report's per-candle EMA/signal columns, since
-    there's no equivalent single indicator here to plot."""
+    metrics/trades/candles shape as backtester.export_report's (so the
+    dashboard's TradingChart/EquityChart work unmodified), except each
+    "candle" carries market_state/bias/setups/no_trade instead of the
+    EMA report's ema_fast/ema_slow/signal columns, since there's no
+    equivalent single indicator here to plot."""
     metrics, trades, snapshots = simulate_setup_engine(
         history, initial_capital, context_window_days, timeframe, asset
     )
@@ -203,7 +221,7 @@ def export_report(
             "stop_priced_off": "setup invalidation level (falls back to flat stop_loss_pct if missing/invalid)",
         },
         "metrics": metrics,
-        "snapshots": snapshots,
+        "candles": snapshots,
         "trades": [
             {
                 "entry_time": t["entry_time"].isoformat(),

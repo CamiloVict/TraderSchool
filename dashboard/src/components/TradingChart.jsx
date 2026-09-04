@@ -16,6 +16,11 @@ function toUnixSeconds(iso) {
 
 export default function TradingChart({ candles, trades }) {
   const containerRef = useRef(null);
+  // Setup Engine reports carry market_state/bias per candle instead of
+  // an EMA pair -- ema_fast/ema_slow are simply absent there, so this
+  // decides whether the EMA lines (and their legend chips) render at
+  // all rather than plotting a flat line of `undefined`.
+  const hasEma = candles.length > 0 && candles[0].ema_fast != null;
 
   useEffect(() => {
     if (!containerRef.current || !candles.length) return undefined;
@@ -51,25 +56,27 @@ export default function TradingChart({ candles, trades }) {
       }))
     );
 
-    const emaFastSeries = chart.addSeries(LineSeries, {
-      color: COLORS.blue,
-      lineWidth: 1,
-      priceLineVisible: false,
-      lastValueVisible: false,
-    });
-    emaFastSeries.setData(
-      candles.map((c) => ({ time: toUnixSeconds(c.timestamp), value: c.ema_fast }))
-    );
+    if (hasEma) {
+      const emaFastSeries = chart.addSeries(LineSeries, {
+        color: COLORS.blue,
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      emaFastSeries.setData(
+        candles.map((c) => ({ time: toUnixSeconds(c.timestamp), value: c.ema_fast }))
+      );
 
-    const emaSlowSeries = chart.addSeries(LineSeries, {
-      color: COLORS.orange,
-      lineWidth: 1,
-      priceLineVisible: false,
-      lastValueVisible: false,
-    });
-    emaSlowSeries.setData(
-      candles.map((c) => ({ time: toUnixSeconds(c.timestamp), value: c.ema_slow }))
-    );
+      const emaSlowSeries = chart.addSeries(LineSeries, {
+        color: COLORS.orange,
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      emaSlowSeries.setData(
+        candles.map((c) => ({ time: toUnixSeconds(c.timestamp), value: c.ema_slow }))
+      );
+    }
 
     // No text on the markers themselves: with dozens of trades on
     // screen the labels overlap into an unreadable smear. Shape +
@@ -101,19 +108,23 @@ export default function TradingChart({ candles, trades }) {
   return (
     <div className="panel">
       <div className="panel__header">
-        <h2>Precio + EMA</h2>
+        <h2>{hasEma ? "Precio + EMA" : "Precio"}</h2>
         <div className="legend-chip-row">
-          <span className="legend-chip">
-            <i style={{ background: COLORS.blue }} /> EMA rápida
-          </span>
-          <span className="legend-chip">
-            <i style={{ background: COLORS.orange }} /> EMA lenta
-          </span>
+          {hasEma && (
+            <>
+              <span className="legend-chip">
+                <i style={{ background: COLORS.blue }} /> EMA rápida
+              </span>
+              <span className="legend-chip">
+                <i style={{ background: COLORS.orange }} /> EMA lenta
+              </span>
+            </>
+          )}
           <span className="legend-chip">
             <i style={{ background: COLORS.green }} /> Compra
           </span>
           <span className="legend-chip">
-            <i style={{ background: COLORS.red }} /> Venta (señal)
+            <i style={{ background: COLORS.red }} /> {hasEma ? "Venta (señal)" : "Venta (salida)"}
           </span>
           <span className="legend-chip">
             <i style={{ background: COLORS.orange }} /> Venta (stop-loss)

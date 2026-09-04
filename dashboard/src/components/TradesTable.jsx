@@ -1,5 +1,17 @@
 import { formatDateTime, formatDuration, formatPct, formatUsd } from "../lib/format";
 
+// exit_reason values differ by which engine produced the trade (EMA
+// crossover vs. the Setup Engine's bias/no_trade exits) -- this maps
+// every reason this repo's backtesters actually emit to a label,
+// falling back to the raw value for anything unmapped instead of
+// mislabeling it.
+const EXIT_REASON_LABELS = {
+  stop_loss: "Stop-loss",
+  signal: "Señal EMA",
+  bias_flip: "Cambio de sesgo",
+  no_trade: "No trade",
+};
+
 export default function TradesTable({ trades }) {
   if (!trades.length) {
     return (
@@ -45,7 +57,7 @@ export default function TradesTable({ trades }) {
                     <td>{formatDuration(t.entry_time, t.exit_time)}</td>
                     <td>
                       <span className={`tag ${isStopLoss ? "tag--warning" : "tag--neutral"}`}>
-                        {isStopLoss ? "Stop-loss" : "Señal EMA"}
+                        {EXIT_REASON_LABELS[t.exit_reason] ?? t.exit_reason}
                       </span>
                     </td>
                     <td className={t.return_pct >= 0 ? "positive" : "negative"}>
