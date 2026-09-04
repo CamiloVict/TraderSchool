@@ -37,15 +37,36 @@ estrategia de cruce de medias sobre ese histórico, imprimiendo:
 retorno total, win rate, drawdown máximo, número de operaciones y
 retorno promedio por operación.
 
+## Trading en Testnet (una orden por ejecución)
+
+```bash
+python main.py --trade
+```
+
+Corre **un solo ciclo**: trae las velas más recientes, calcula la señal
+EMA 20/50, mira tu balance real en la cuenta testnet para saber si ya
+estás en posición, y si la señal cambió, coloca UNA orden de mercado
+(compra o venta) dimensionada por `risk_manager.position_size()`. No
+corre en loop infinito — está pensado para invocarse una vez por cierre
+de vela (cron/systemd timer cada hora), así cada corrida es corta, fácil
+de loguear y de matar/reiniciar sin perder estado (el "estado" es
+simplemente lo que la cuenta testnet tiene en ese momento).
+
+**Nunca coloca órdenes si `BINANCE_TESTNET` no es `true`** — `executor.py`
+lo verifica antes de cada orden y lanza `LiveTradingDisabledError` si no.
+
 ## Estado del proyecto
 
 - [x] Estructura del proyecto
 - [x] `data_fetcher.py`: conexión vía ccxt en modo sandbox + histórico OHLCV
-- [x] `main.py`: script de verificación de conexión y datos
+- [x] `main.py`: verificación de conexión (`python main.py`) y ciclo de
+  trading en testnet (`python main.py --trade`)
 - [x] `strategy.py`: cruce de EMA 20/50, long-only
 - [x] `backtester.py`: simulación + métricas (retorno, win rate, drawdown)
-- [ ] `risk_manager.py`: stop-loss, sizing, límites diarios (Fase 3)
-- [ ] `executor.py`: órdenes en Testnet (Fase 3+, nunca en real todavía)
+- [x] `risk_manager.py`: tamaño de posición por % de riesgo, precios de
+  stop-loss/take-profit, límite de pérdida diaria (`DailyLossTracker`)
+- [x] `executor.py`: órdenes de mercado en Testnet, bloqueadas si
+  `USE_TESTNET` es `False`
 
 ## Decisiones tomadas hasta ahora
 
@@ -71,6 +92,21 @@ retorno promedio por operación.
   comisión plana de 0.1% (taker fee típico de Binance Spot) por operación,
   para no inflar artificialmente el retorno. Es una simplificación — por
   eso después probamos en testnet además de backtestear.
-- **`risk_manager.py`/`executor.py` siguen siendo stubs**: ningún riesgo
-  real de capital hasta que existan sizing/stop-loss y hasta que decidamos
-  juntos pasar a ejecución en testnet.
+- **Sizing por riesgo, no por "quiero comprar X"**: `position_size()`
+  calcula cuánto comprar para que, SI se toca el stop-loss, la pérdida
+  sea exactamente `RISK_PER_TRADE_PCT` del capital — no una cantidad
+  arbitraria de BTC.
+- **Sin estado local**: `main.py --trade` no guarda en disco si "está en
+  posición" — lo deduce leyendo el balance real de la cuenta testnet en
+  cada corrida. Es más simple y sobrevive a reinicios/crashes sin
+  desincronizarse del exchange.
+- **Limitación importante, señalada a propósito**: la salida de una
+  operación depende solo de que la EMA rápida vuelva a cruzar por debajo
+  de la lenta en la siguiente vela — todavía **no se coloca una orden de
+  stop-loss real en el exchange**. `risk_manager.stop_loss_price()` se
+  usa para calcular el tamaño de la posición, pero un movimiento brusco
+  entre cierres de vela no está protegido hasta el siguiente chequeo
+  horario. Es aceptable en testnet (dinero ficticio); antes de capital
+  real habría que agregar una orden STOP_LOSS_LIMIT real — lo dejo para
+  discutir contigo, es una decisión de arquitectura no trivial (maneja
+  fills parciales, cancelaciones, etc.).
