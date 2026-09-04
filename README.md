@@ -34,13 +34,21 @@ BTC/USDT y (si pusiste tus keys) tu balance de testnet.
 ## Backtest
 
 ```bash
-python backtester.py
+python backtester.py --source real --days 365
 ```
 
-Trae ~180 días de velas de BTC/USDT 1h desde el testnet y corre la
-estrategia de cruce de medias sobre ese histórico, imprimiendo:
+Corre la estrategia de cruce de medias sobre el histórico e imprime:
 retorno total, win rate, drawdown máximo, número de operaciones y
 retorno promedio por operación.
+
+**Usá `--source real`** (Binance real, datos públicos, sin API key, sin
+riesgo — no coloca órdenes) en vez del default `--source testnet`. El
+testnet solo guarda una ventana corta de velas (en la práctica, unas
+pocas semanas) — no alcanza para un backtest confiable, y con pocas
+operaciones el resultado puede depender casi por completo de una sola
+racha. La ejecución de órdenes (`main.py --trade`) sigue usando
+*siempre* el testnet, sin importar de dónde vengan los datos del
+backtest.
 
 ## Trading en Testnet (una orden por ejecución)
 
@@ -119,6 +127,16 @@ corras el backtest con datos reales del testnet.
   suficientemente rápido para capturar tendencias de varios días,
   suficientemente lento para no operar en cada ruido de una vela. Sin
   shorts porque una cuenta Spot no puede vender en corto de forma nativa.
+- **Backtest contra Binance real, ejecución solo en testnet.**
+  `data_fetcher.get_public_data_exchange()` trae velas del Binance real
+  (endpoint público, sin API key, sin poder colocar órdenes) porque el
+  testnet solo retiene una ventana corta de historial — en nuestra
+  primera corrida con datos reales del testnet, "180 días" pedidos
+  devolvieron apenas ~28, con solo 5 operaciones cerradas y el resultado
+  dominado por una sola racha ganadora. Separar de dónde vienen los
+  datos (backtest) de dónde se ejecutan las órdenes (siempre testnet,
+  vía `get_exchange()`) resuelve eso sin tocar la garantía de seguridad
+  de `executor.py`.
 - **Backtest asume fill al cierre de la vela de cruce** y aplica una
   comisión plana de 0.1% (taker fee típico de Binance Spot) por operación,
   para no inflar artificialmente el retorno. Es una simplificación — por

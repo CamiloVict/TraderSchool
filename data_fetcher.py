@@ -18,7 +18,13 @@ OHLCV_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
 
 
 def get_exchange() -> ccxt.binance:
-    """Build a ccxt Binance client, pointed at the Testnet unless disabled."""
+    """Build a ccxt Binance client, pointed at the Testnet unless disabled.
+
+    Used for everything that can touch the account (balances, orders).
+    For historical OHLCV to backtest against, prefer
+    get_public_data_exchange() — Testnet only retains a short rolling
+    window of candles, nowhere near enough history for a real backtest.
+    """
     exchange = ccxt.binance(
         {
             "apiKey": BINANCE_API_KEY,
@@ -30,6 +36,17 @@ def get_exchange() -> ccxt.binance:
     if USE_TESTNET:
         exchange.set_sandbox_mode(True)
     return exchange
+
+
+def get_public_data_exchange() -> ccxt.binance:
+    """Real Binance, public market data only — no API key, no sandbox.
+
+    OHLCV/klines are public endpoints; no auth needed. This client is
+    never used for orders or balances (see executor.py, which only
+    ever uses get_exchange()) — it exists solely so backtester.py can
+    pull years of real price history instead of Testnet's short one.
+    """
+    return ccxt.binance({"enableRateLimit": True, "options": {"defaultType": "spot"}})
 
 
 def _to_dataframe(raw_candles: list) -> pd.DataFrame:

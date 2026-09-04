@@ -181,7 +181,7 @@ if __name__ == "__main__":
     import argparse
 
     from config import SYMBOL, TIMEFRAME
-    from data_fetcher import fetch_ohlcv_history, get_exchange
+    from data_fetcher import fetch_ohlcv_history, get_exchange, get_public_data_exchange
 
     parser = argparse.ArgumentParser(description="Backtest the EMA-crossover strategy")
     parser.add_argument(
@@ -190,13 +190,25 @@ if __name__ == "__main__":
         help="Also write a JSON report for the dashboard (e.g. dashboard/public/data/backtest.json)",
     )
     parser.add_argument("--days", type=int, default=180, help="Days of history to fetch (default 180)")
+    parser.add_argument(
+        "--source",
+        choices=["testnet", "real"],
+        default="testnet",
+        help=(
+            "Where to pull candles from. 'testnet' (default) only keeps a short "
+            "rolling window of history, so a long --days request may come back "
+            "short. 'real' reads real Binance's public market data (no API key "
+            "needed, no orders placed) for a proper multi-month/year backtest — "
+            "order execution (main.py --trade) still only ever uses Testnet."
+        ),
+    )
     args = parser.parse_args()
 
-    exchange = get_exchange()
+    exchange = get_public_data_exchange() if args.source == "real" else get_exchange()
     since_ms = exchange.parse8601(
         (pd.Timestamp.utcnow() - pd.Timedelta(days=args.days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
-    print(f"Fetching {SYMBOL} {TIMEFRAME} history (last ~{args.days} days) ...")
+    print(f"Fetching {SYMBOL} {TIMEFRAME} history from {args.source} (last ~{args.days} days) ...")
     history = fetch_ohlcv_history(exchange, symbol=SYMBOL, timeframe=TIMEFRAME, since_ms=since_ms)
     print(f"Got {len(history)} candles: {history.index.min()} -> {history.index.max()}\n")
 
