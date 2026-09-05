@@ -738,14 +738,9 @@ Dinero real es una decisión aparte y deliberada (ver `executor.py`) —
 esto es lo que falta para que el bot corra de forma confiable contra
 **Testnet**, sin nadie mirando cada corrida:
 
-- [ ] **Confirmar que `PAXG/USDT` existe en Binance Spot Testnet.**
-  Este entorno no tiene acceso de red para chequearlo (confirmado: el
-  proxy rechaza la conexión a `testnet.binance.vision`) — hay que
-  correr `python main.py` en una máquina con acceso real. Ya no hace
-  falta interpretar un traceback de ccxt para saberlo: el chequeo de
-  conexión ahora valida explícitamente que `SYMBOL` está listado antes
-  de seguir, y si no lo está, lista los mercados con el mismo activo
-  base que sí existen.
+- [x] **Confirmar que `PAXG/USDT` existe en Binance Spot Testnet.**
+  Confirmado corriendo `python main.py` contra el Testnet real: listado
+  y operable, con velas reales sirviendo (~$4,432 al momento de probar).
 - [x] **Programar el cron/systemd timer.** `scripts/run_trade_cycle.sh`
   + `deploy/systemd/trading-bot.{service,timer}` — ver "Automatizarlo"
   arriba. Falta que vos elijas dónde corre y lo instales; el wrapper ya
