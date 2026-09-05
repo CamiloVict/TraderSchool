@@ -1,0 +1,14 @@
+[Unit]
+Description=Trading bot -- one main.py --trade cycle
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# EDIT these two before installing: the account to run as, and the
+# absolute path this repo was cloned to (must match the path baked
+# into trading-bot.timer's WorkingDirectory-independent invocation
+# below -- run_trade_cycle.sh resolves the repo root from its own
+# location, so this is the only path that needs to match reality).
+User=REPLACE_WITH_YOUR_USER
+ExecStart=/REPLACE/WITH/REPO/PATH/scripts/run_trade_cycle.sh

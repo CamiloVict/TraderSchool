@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the trading bot's cycle every hour, on candle close
+
+[Timer]
+# Top of every hour -- matches TIMEFRAME=1h candle closes. Change both
+# this and config.py's TIMEFRAME together if you ever switch timeframe.
+OnCalendar=*-*-* *:00:00
+# If the machine was off/asleep when a run was due, catch up once at
+# boot instead of silently skipping straight to the next hour.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

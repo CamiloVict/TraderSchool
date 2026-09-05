@@ -90,6 +90,50 @@ de dejar la posición desprotegida hasta el próximo cruce.
 **Nunca coloca órdenes si `BINANCE_TESTNET` no es `true`** — `executor.py`
 lo verifica antes de cada orden y lanza `LiveTradingDisabledError` si no.
 
+### Automatizarlo (cron o systemd timer)
+
+`main.py --trade` está pensado para que algo externo lo invoque una vez
+por hora en punto (cierre de vela para `TIMEFRAME=1h`) — el proceso en
+sí nunca hace su propio loop ni scheduling.
+
+**Opción 1: cron** (funciona en cualquier Linux/macOS, sin dependencias):
+
+```bash
+crontab -e
+# agregar esta línea (ajustá la ruta a donde clonaste el repo):
+0 * * * * /ruta/a/este/repo/scripts/run_trade_cycle.sh >> /ruta/a/este/repo/logs/cron.log 2>&1
+```
+
+`scripts/run_trade_cycle.sh` existe específicamente porque cron corre
+con un entorno casi vacío — sin tu venv activado, sin tu `$PATH`
+interactivo, sin tu directorio de trabajo. El script resuelve la raíz
+del repo por sí mismo, activa `.venv` si existe, y corre
+`python main.py --trade` — así el crontab solo necesita saber la ruta a
+este archivo.
+
+**Opción 2: systemd timer** (Linux con systemd; da `systemctl status`,
+`journalctl`, y reintento automático si la máquina estuvo apagada):
+
+```bash
+# editar deploy/systemd/trading-bot.service: reemplazar el usuario y
+# la ruta absoluta al repo, después:
+sudo cp deploy/systemd/trading-bot.service deploy/systemd/trading-bot.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now trading-bot.timer
+systemctl list-timers trading-bot.timer   # confirmar próxima corrida
+journalctl -u trading-bot.service -f      # ver logs en vivo
+```
+
+Con cualquiera de las dos, cada corrida también queda en
+`logs/trading.log` (rotado, ver `main._configure_logging()`) además de
+donde cron/systemd la redirija — es la fuente de verdad si algo falla
+a mitad de ciclo.
+
+**Antes de dejarlo corriendo desatendido**, corré `python main.py` (sin
+`--trade`) una vez a mano: valida la conexión, que `SYMBOL` esté
+listado en este Testnet, y tus API keys — mucho más fácil de leer que
+un fallo silencioso en la primera corrida de cron a las 3am.
+
 ## Filtro de patrones de chart (`patterns.py`, opt-in)
 
 ```bash
@@ -580,10 +624,12 @@ esto es lo que falta para que el bot corra de forma confiable contra
   conexión ahora valida explícitamente que `SYMBOL` está listado antes
   de seguir, y si no lo está, lista los mercados con el mismo activo
   base que sí existen.
-- [ ] **Programar el cron/systemd timer** que invoque
-  `main.py --trade` una vez por cierre de vela (hora en punto, para
-  `TIMEFRAME=1h`). El código está listo para eso; el timer en sí no
-  existe en ningún lado todavía.
+- [x] **Programar el cron/systemd timer.** `scripts/run_trade_cycle.sh`
+  + `deploy/systemd/trading-bot.{service,timer}` — ver "Automatizarlo"
+  arriba. Falta que vos elijas dónde corre y lo instales; el wrapper ya
+  se probó de punta a punta en este entorno (falla limpio contra la
+  falta de red del sandbox, con traceback completo en
+  `logs/trading.log` en vez de morir en silencio).
 - [ ] **Correr de punta a punta contra el Testnet real al menos una
   vez**, no solo contra `FakeExchange` en los tests — confirmar que las
   API keys, el sizing y la colocación de órdenes funcionan contra el
