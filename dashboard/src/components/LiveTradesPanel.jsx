@@ -19,14 +19,19 @@ export default function LiveTradesPanel({ trades }) {
         <p className="text-dim">
           Esto es lo que el bot <strong>hizo de verdad</strong> contra Testnet — no un backtest.
           Todavía no hay nada acá porque <code>data/trade_journal.json</code> (donde{" "}
-          <code>main.py --trade</code> lo va guardando) no se copió al dashboard. Corré:
+          <code>main.py --trade</code> lo va guardando) no se copió al dashboard.
+        </p>
+        <p className="text-dim">
+          Si corrés el bot con <code>scripts/run_trade_cycle.sh</code> (cron o el timer de
+          systemd), esto se copia solo después de cada ciclo — solo hace falta esperar la próxima
+          corrida y refrescar. Si preferís verlo ya, o corrés <code>main.py --trade</code> directo
+          sin el wrapper, copiá el archivo a mano:
         </p>
         <pre className="code-block">
           cp data/trade_journal.json dashboard/public{DATA_DIR}/trade_journal.json
         </pre>
         <p className="text-dim">
-          y refrescá — no se commitea al repo (son datos reales de tu cuenta), así que hay que
-          repetir esto cada vez que quieras ver operaciones nuevas.
+          No se commitea al repo — son datos reales de tu cuenta.
         </p>
       </div>
     );
