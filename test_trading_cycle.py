@@ -207,6 +207,39 @@ class RunTradingCycleTests(unittest.TestCase):
         self.assertEqual(exchange.created_orders, [])
 
 
+class NotifyWiringTests(unittest.TestCase):
+    """run_trading_cycle() -- not each individual cycle function -- is
+    where notify() gets called, so this covers both engines' actions
+    from one place: "hold" (the expected common case, every cycle)
+    must stay silent, anything else should notify."""
+
+    def setUp(self):
+        patcher = patch("main.load_or_init_starting_capital", side_effect=lambda equity, **_: equity)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_hold_does_not_notify(self):
+        candles = make_candles(200, start_price=10000, step=0)  # flat -> no crossover either way
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        with patch("main.notify") as mock_notify:
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "hold")
+        mock_notify.assert_not_called()
+
+    def test_a_buy_notifies(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        with patch("main.notify") as mock_notify:
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "buy")
+        mock_notify.assert_called_once()
+        self.assertIn("buy", mock_notify.call_args[0][0])
+
+
 def make_history_df(n: int, start_price: float = 10000.0, step: float = 10.0) -> pd.DataFrame:
     """A plausible-looking OHLCV history DataFrame, standing in for
     what fetch_ohlcv_history would return. build_context() itself is
@@ -512,6 +545,16 @@ class MainEntrypointTests(unittest.TestCase):
                 main.main()
 
         self.assertEqual(ctx.exception.code, 1)
+
+    def test_notifies_when_the_cycle_raises(self):
+        with patch("main.USE_TESTNET", True), patch("main._configure_logging"), patch(
+            "main.run_trading_cycle", side_effect=RuntimeError("boom")
+        ), patch("sys.argv", ["main.py", "--trade"]), patch("main.notify") as mock_notify:
+            with self.assertRaises(SystemExit):
+                main.main()
+
+        mock_notify.assert_called_once()
+        self.assertIn("FAILED", mock_notify.call_args[0][0])
 
     def test_runs_the_cycle_normally_when_testnet_is_on(self):
         with patch("main.USE_TESTNET", True), patch("main._configure_logging"), patch(

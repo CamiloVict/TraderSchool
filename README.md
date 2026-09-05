@@ -134,6 +134,31 @@ a mitad de ciclo.
 listado en este Testnet, y tus API keys — mucho más fácil de leer que
 un fallo silencioso en la primera corrida de cron a las 3am.
 
+### Notificaciones (`notifier.py`, opt-in)
+
+`logs/trading.log` es la fuente de verdad, pero nadie lo mira en vivo.
+Configurando cualquiera de estas dos variables en `.env`, `--trade` te
+avisa cada vez que compra, vende, bloquea una entrada, o falla:
+
+```bash
+# Telegram: creá un bot con @BotFather, mandale un mensaje una vez, y
+# mirá https://api.telegram.org/bot<token>/getUpdates para tu chat_id.
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+
+# O un webhook genérico (Slack, Discord, lo que sea que acepte un POST
+# con JSON) — funciona junto con Telegram o en vez de él.
+ALERT_WEBHOOK_URL=https://hooks.slack.com/services/...
+```
+
+Ninguna de las dos es obligatoria — con ambas vacías (el default),
+`--trade` se comporta exactamente igual que antes de que esto existiera.
+No avisa en cada `hold` (sería spam cada hora) — solo en lo que de
+verdad amerita mirar. Y es best-effort a propósito: si el envío mismo
+falla (token vencido, sin red), queda logueado como warning pero nunca
+tira abajo el ciclo de trading — una alerta rota no debería convertirse
+en una razón más para que `--trade` falle.
+
 ## Filtro de patrones de chart (`patterns.py`, opt-in)
 
 ```bash
@@ -449,7 +474,7 @@ python -m unittest test_context_validation test_context_structure \
                    test_context_setups test_context_state_machine -v
 ```
 
-O toda la suite del repo (183 tests) con `python -m unittest discover`.
+O toda la suite del repo (194 tests) con `python -m unittest discover`.
 
 ## Dashboard (React)
 
@@ -558,6 +583,13 @@ el resto del dashboard.
   + hora UTC actual) en toda orden — si la misma orden se reenvía dos
   veces (un reintento, o el mismo ciclo horario corriendo de nuevo),
   Binance rechaza el duplicado en vez de ejecutarlo otra vez
+- [x] `notifier.py`: notificaciones opt-in por Telegram y/o un webhook
+  genérico para lo que `--trade` hace (compra/venta, entrada bloqueada,
+  fallo) — silencioso en `hold` para no ser spam horario, y best-effort
+  a propósito: un envío fallido queda logueado y nunca tira abajo el
+  ciclo de trading. El mensaje de error se loguea sin el `str()` de la
+  excepción — `requests`/`urllib3` suelen incluir la URL completa en
+  ese mensaje, y esa URL tiene el token/webhook secreto embebido
 - [x] `executor.py`: órdenes de mercado y stop-loss real
   (`STOP_LOSS_LIMIT`) en Testnet, bloqueadas si `USE_TESTNET` es `False`
 - [x] `dashboard/`: panel React (Vite) con gráfico de velas real
@@ -624,7 +656,12 @@ el resto del dashboard.
   que se recuperan de un `NetworkError` transitorio pero no tocan
   ningún otro error, y el `newClientOrderId` determinístico por
   símbolo+lado+hora en toda orden colocada
-- [x] 183 tests en total en el repo — `python -m unittest discover`
+- [x] `test_notifier.py` (8 tests): fan-out a los canales configurados
+  nada más, un envío fallido nunca propaga, y — el que de verdad
+  importa — que un error de red que ecoa la URL completa (típico de
+  `requests`/`urllib3`) nunca termina logueando el token de Telegram ni
+  la URL del webhook en texto plano
+- [x] 194 tests en total en el repo — `python -m unittest discover`
 
 ## Falta para producción (correr desatendido contra Testnet)
 

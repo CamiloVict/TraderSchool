@@ -93,6 +93,7 @@ from config import (
 )
 from daily_loss_state import load_or_init_starting_capital
 from data_fetcher import fetch_ohlcv, get_exchange
+from notifier import notify
 from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
 from retry import call_with_retries
 from risk_manager import DailyLossTracker
@@ -170,6 +171,14 @@ def check_connection() -> None:
         print("(Public market data works fine without keys.)")
 
 
+# Actions that don't need a human's attention -- everything else (a
+# buy/sell, an entry blocked by the daily loss limit or the pattern
+# filter, a missing stop rebuilt, no data) gets a notify() call. "hold"
+# is the expected common case every single cycle; alerting on it would
+# make the channel useless within a day.
+_SILENT_ACTIONS = ("hold",)
+
+
 def run_trading_cycle(exchange=None) -> dict:
     """Fetch the latest signal and, if it differs from the account's
     current position, place a single Testnet order. Returns a dict
@@ -177,9 +186,10 @@ def run_trading_cycle(exchange=None) -> dict:
     EMA or Setup Engine cycle per config.USE_SETUP_ENGINE (see the
     module docstring)."""
     exchange = exchange or get_exchange()
-    if USE_SETUP_ENGINE:
-        return _run_setup_engine_cycle(exchange)
-    return _run_ema_cycle(exchange)
+    result = _run_setup_engine_cycle(exchange) if USE_SETUP_ENGINE else _run_ema_cycle(exchange)
+    if result.get("action") not in _SILENT_ACTIONS:
+        notify(f"{SYMBOL} {TIMEFRAME}: {result.get('action')} @ {result.get('price')}")
+    return result
 
 
 def _run_ema_cycle(exchange) -> dict:
@@ -452,6 +462,7 @@ def main() -> None:
             run_trading_cycle()
         except Exception:
             logger.exception("Trading cycle failed")
+            notify(f"{SYMBOL} {TIMEFRAME}: trading cycle FAILED — see logs/trading.log")
             sys.exit(1)
     else:
         check_connection()

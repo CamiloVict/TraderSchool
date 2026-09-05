@@ -72,3 +72,18 @@ USE_SETUP_ENGINE = os.getenv("USE_SETUP_ENGINE", "false").strip().lower() == "tr
 # weekly candles (context_engine's own README math): 540 days is ~77
 # weeks. Irrelevant, and not fetched, when USE_SETUP_ENGINE is False.
 CONTEXT_HISTORY_DAYS = int(os.getenv("CONTEXT_HISTORY_DAYS", "540"))
+
+# --- Notifications (see notifier.py) ---------------------------------------
+# Opt-in, off by default: main.py --trade fans a message out to
+# whichever of these are configured whenever it does something worth
+# knowing about (a buy/sell, an entry blocked by the daily loss limit
+# or the pattern filter, no data) or the cycle raises an unhandled
+# exception. Leave both empty to keep --trade silent except for
+# logs/trading.log, exactly like before this existed.
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# Generic webhook URL (a Slack incoming webhook, a Discord webhook, or
+# anything else that accepts a POSTed JSON body) — notifier.py sends
+# both {"text": ...} and {"content": ...} so either works without this
+# needing to know which service it's pointed at.
+ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL", "")
