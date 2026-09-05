@@ -732,25 +732,24 @@ el resto del dashboard.
   tocaría a Binance pasa por un `FakeExchange` en los tests, así que no
   hace falta ningún secret configurado para que corra
 
-## Falta para producción (correr desatendido contra Testnet)
+## Producción (correr desatendido contra Testnet)
 
-Dinero real es una decisión aparte y deliberada (ver `executor.py`) —
-esto es lo que falta para que el bot corra de forma confiable contra
-**Testnet**, sin nadie mirando cada corrida:
+Dinero real sigue siendo una decisión aparte y deliberada (ver
+`executor.py`) — pero correr de forma confiable y desatendida contra
+**Testnet** ya está validado de punta a punta:
 
-- [x] **Confirmar que `PAXG/USDT` existe en Binance Spot Testnet.**
-  Confirmado corriendo `python main.py` contra el Testnet real: listado
-  y operable, con velas reales sirviendo (~$4,432 al momento de probar).
-- [x] **Programar el cron/systemd timer.** `scripts/run_trade_cycle.sh`
-  + `deploy/systemd/trading-bot.{service,timer}` — ver "Automatizarlo"
-  arriba. Falta que vos elijas dónde corre y lo instales; el wrapper ya
-  se probó de punta a punta en este entorno (falla limpio contra la
-  falta de red del sandbox, con traceback completo en
-  `logs/trading.log` en vez de morir en silencio).
-- [ ] **Correr de punta a punta contra el Testnet real al menos una
-  vez**, no solo contra `FakeExchange` en los tests — confirmar que las
-  API keys, el sizing y la colocación de órdenes funcionan contra el
-  exchange real antes de dejarlo desatendido.
+- [x] **`PAXG/USDT` confirmado en Binance Spot Testnet.** Listado y
+  operable, con velas reales sirviendo (~$4,432 al momento de probar).
+- [x] **Cron/systemd timer listos.** `scripts/run_trade_cycle.sh` +
+  `deploy/systemd/trading-bot.{service,timer}` — ver "Automatizarlo"
+  arriba. Instalarlos (elegir dónde corre) queda a tu criterio.
+- [x] **Corrida real de punta a punta contra Testnet, confirmada.**
+  `python main.py --trade` autenticó, detectó una posición abierta real
+  (`in_position_before: True`, vía `fetch_balance()`), y colocó una
+  orden de venta real en el exchange (`order_id` devuelto por Binance)
+  — no un mock. API keys, sizing, y colocación de órdenes, todo
+  validado contra el Testnet real, no solo contra `FakeExchange` en los
+  tests.
 
 ## Decisiones tomadas hasta ahora
 
