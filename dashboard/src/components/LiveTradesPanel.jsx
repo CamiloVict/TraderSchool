@@ -1,16 +1,17 @@
 import { formatDateTime, formatUsd } from "../lib/format";
 
-const DATA_DIR = "/data";
-
 // trade_journal.py writes raw Binance fills (real account activity),
-// not a demo/backtest artifact -- unlike backtest.json, this file is
+// not a demo/backtest artifact -- unlike backtest*.json, this file is
 // never meant to be committed (see dashboard/.gitignore) and has to be
 // copied in locally, so a missing file is the *expected* state on a
 // fresh checkout, not an error to alarm about. `trades` is fetched once
-// in App.jsx (it also needs it to derive the open position) and passed
-// down rather than fetched again here.
-export default function LiveTradesPanel({ trades }) {
+// per tab in AssetPanel (it also needs it to derive the open position)
+// and passed down rather than fetched again here. `journalUrl` is that
+// same tab's data file, used only to name the exact path in the empty
+// state -- each bot/symbol writes its own file (see README).
+export default function LiveTradesPanel({ trades, journalUrl }) {
   if (!trades || trades.length === 0) {
+    const filename = journalUrl.split("/").pop();
     return (
       <div className="panel">
         <div className="panel__header">
@@ -18,7 +19,7 @@ export default function LiveTradesPanel({ trades }) {
         </div>
         <p className="text-dim">
           Esto es lo que el bot <strong>hizo de verdad</strong> contra Testnet — no un backtest.
-          Todavía no hay nada acá porque <code>data/trade_journal.json</code> (donde{" "}
+          Todavía no hay nada acá porque <code>data/{filename}</code> (donde{" "}
           <code>main.py --trade</code> lo va guardando) no se copió al dashboard.
         </p>
         <p className="text-dim">
@@ -28,7 +29,7 @@ export default function LiveTradesPanel({ trades }) {
           sin el wrapper, copiá el archivo a mano:
         </p>
         <pre className="code-block">
-          cp data/trade_journal.json dashboard/public{DATA_DIR}/trade_journal.json
+          cp data/{filename} dashboard/public/data/{filename}
         </pre>
         <p className="text-dim">
           No se commitea al repo — son datos reales de tu cuenta.

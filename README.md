@@ -561,30 +561,39 @@ real de operaciones (`data/trade_journal.json`). El contexto de mercado
 al final — es lectura de fondo, no lo primero que hay que mirar. Ver
 `dashboard/README.md`.
 
+Tiene una pestaña por bot/símbolo (hoy: Oro/PAXG y BTC) — cada uno
+corre como un cron separado, con sus propios archivos de estado, así
+que nunca se mezcla la posición o el historial de uno con el del otro.
+Agregar un símbolo nuevo es agregar una entrada a `TABS` en
+`dashboard/src/App.jsx` con sus tres rutas de datos.
+
 Sigue sin haber backend: todo sale de JSON estáticos en
 `dashboard/public/data/`.
 
-- **Historial real / posición abierta** (`trade_journal.json`): lo
+- **Historial real / posición abierta** (`trade_journal.json` para
+  PAXG; `trade_journal_btc.json` para BTC, cuando ese bot exista): lo
   escribe `trade_journal.py` en cada ciclo de `main.py --trade`, en
-  `data/trade_journal.json`. Si corrés el bot vía
-  `scripts/run_trade_cycle.sh` (cron o el timer de systemd, ver más
-  abajo), ese archivo se copia solo a
-  `dashboard/public/data/trade_journal.json` en cada corrida — **no
-  hace falta ningún `cp` manual** una vez que el cron está instalado.
-  Son datos reales de tu cuenta: nunca se commitean (`.gitignore`).
-- **Precio de fondo** (`backtest_paxg.json`): velas OHLC reales para
-  dibujar el gráfico, generadas una vez (y regeneradas cuando quieras
-  refrescar el historial) con:
+  `data/<archivo>`. Si corrés el bot vía `scripts/run_trade_cycle.sh`
+  (cron o el timer de systemd, ver más abajo), ese archivo se copia
+  solo a `dashboard/public/data/<archivo>` en cada corrida — **no hace
+  falta ningún `cp` manual** una vez que el cron está instalado. Son
+  datos reales de tu cuenta: nunca se commitean (`.gitignore`).
+- **Precio de fondo** (`backtest_paxg.json` / `backtest_btc.json`):
+  velas OHLC reales para dibujar el gráfico, generadas una vez (y
+  regeneradas cuando quieras refrescar el historial) con:
 
   ```bash
   python backtester.py --export dashboard/public/data/backtest_paxg.json
+  SYMBOL="BTC/USDT" python backtester.py --export dashboard/public/data/backtest_btc.json
   ```
 
   Ninguna métrica de backtest (retorno, win rate, equity, etc.) se
   muestra ya en el dashboard — esas quedaron solo en la salida de
   `backtester.py` por consola/JSON crudo.
-- **Contexto de mercado** (`context_paxg.json`, opcional): generado con
-  `python -m context_engine --export dashboard/public/data/context_paxg.json`.
+- **Contexto de mercado** (`context_paxg.json` / `context.json`,
+  opcional): generado con
+  `python -m context_engine --export dashboard/public/data/context_paxg.json`
+  (agregando `--symbol BTC/USDT --export .../context.json` para BTC).
   Si no existe, el panel se repliega solo y explica el comando.
 
 ## Estado del proyecto
