@@ -127,6 +127,24 @@ de descartarlo por la misma razón que el de PAXG:
 python scalping_backtester.py --days 90 --walk-forward 3 --take-profit
 ```
 
+**Parámetros de `scalping_strategy.py` como flags de CLI** (`--lookback`,
+`--rsi-period`, `--rsi-oversold`, `--discount-max`, `--premium-min`,
+`--min-range-atr-multiple`, `--stop-buffer-atr-multiple`,
+`--min-reward-risk-ratio`): todos los números que se afinaron esta
+sesión (`RSI_OVERSOLD`, `MIN_RANGE_ATR_MULTIPLE`, etc.) se calibraron
+específicamente contra el ruido de velas de 5 minutos — probar un
+`--timeframe` distinto (por ejemplo `4h`) con esos mismos valores no
+prueba si la estrategia funciona a ese timeframe, prueba si esos
+números en particular siguen sirviendo ahí, y la respuesta suele ser
+que no (a 4h el RSI es mucho más suave y rara vez toca un umbral
+calibrado para 5m, dando 0 operaciones). Reafinar para otro timeframe
+es el mismo proceso iterativo de siempre, ahora sin tener que editar
+código en cada vuelta:
+
+```bash
+python scalping_backtester.py --timeframe 4h --days 180 --walk-forward 3 --rsi-oversold 35
+```
+
 **Usá `--source real`** (Binance real, datos públicos, sin API key, sin
 riesgo — no coloca órdenes) en vez del default `--source testnet`. El
 testnet solo guarda una ventana corta de velas (en la práctica, unas

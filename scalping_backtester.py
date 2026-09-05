@@ -351,7 +351,59 @@ if __name__ == "__main__":
             "tested against real data, same as every other opt-in flag here."
         ),
     )
+    # Every one of scalping_strategy.py's own tunable numbers, exposed
+    # here instead of only via add_signals()'s Python kwargs -- these
+    # were all tuned specifically against 5m BTC noise (see this
+    # module's own history); testing a different --timeframe needs to
+    # re-sweep them too, not just point the same numbers at new candles.
+    # Left as None (module defaults) unless explicitly passed.
+    parser.add_argument("--lookback", type=int, default=None, help=f"Rolling range window, candles (default {LOOKBACK})")
+    parser.add_argument("--rsi-period", type=int, default=None, help=f"RSI lookback, candles (default {RSI_PERIOD})")
+    parser.add_argument(
+        "--rsi-oversold", type=float, default=None, help=f"RSI threshold for the oversold entry gate (default {RSI_OVERSOLD})"
+    )
+    parser.add_argument(
+        "--discount-max",
+        type=float,
+        default=None,
+        help=f"Entry only within this bottom %% of the range (default {DISCOUNT_MAX})",
+    )
+    parser.add_argument(
+        "--premium-min", type=float, default=None, help=f"Exit once price reaches this top %% of the range (default {PREMIUM_MIN})"
+    )
+    parser.add_argument(
+        "--min-range-atr-multiple",
+        type=float,
+        default=None,
+        help=f"Minimum range width, in ATRs, to even consider trading it (default {MIN_RANGE_ATR_MULTIPLE})",
+    )
+    parser.add_argument(
+        "--stop-buffer-atr-multiple",
+        type=float,
+        default=None,
+        help=f"How many ATRs below the range low the stop sits (default {STOP_BUFFER_ATR_MULTIPLE})",
+    )
+    parser.add_argument(
+        "--min-reward-risk-ratio",
+        type=float,
+        default=None,
+        help=f"Minimum reward:risk to take a candidate entry (default {MIN_REWARD_RISK_RATIO})",
+    )
     args = parser.parse_args()
+
+    strategy_kwargs = {"use_take_profit": args.take_profit}
+    for flag, value in (
+        ("lookback", args.lookback),
+        ("rsi_period", args.rsi_period),
+        ("rsi_oversold", args.rsi_oversold),
+        ("discount_max", args.discount_max),
+        ("premium_min", args.premium_min),
+        ("min_range_atr_multiple", args.min_range_atr_multiple),
+        ("stop_buffer_atr_multiple", args.stop_buffer_atr_multiple),
+        ("min_reward_risk_ratio", args.min_reward_risk_ratio),
+    ):
+        if value is not None:
+            strategy_kwargs[flag] = value
 
     exchange = get_public_data_exchange()
     since_ms = exchange.parse8601(
@@ -361,8 +413,13 @@ if __name__ == "__main__":
     history = fetch_ohlcv_history(exchange, symbol=args.symbol, timeframe=args.timeframe, since_ms=since_ms)
     print(f"Got {len(history)} candles: {history.index.min()} -> {history.index.max()}\n")
 
+    effective_lookback = strategy_kwargs.get("lookback", LOOKBACK)
+    effective_rsi_period = strategy_kwargs.get("rsi_period", RSI_PERIOD)
+
     if args.walk_forward:
-        segments = split_into_segments(history, args.walk_forward, min_candles=max(LOOKBACK, RSI_PERIOD) * 2)
+        segments = split_into_segments(
+            history, args.walk_forward, min_candles=max(effective_lookback, effective_rsi_period) * 2
+        )
         print(f"Walk-forward: {args.walk_forward} segments, identical config run on each --\n")
         segment_returns = []
         comparison_keys = (
@@ -375,7 +432,7 @@ if __name__ == "__main__":
             "profit_factor",
         )
         for i, segment in enumerate(segments, start=1):
-            segment_metrics = run_backtest(segment, use_take_profit=args.take_profit)
+            segment_metrics = run_backtest(segment, **strategy_kwargs)
             segment_returns.append(segment_metrics["total_return_pct"])
             print(
                 f"--- Segment {i}/{args.walk_forward}: {segment.index.min()} -> "
@@ -394,12 +451,12 @@ if __name__ == "__main__":
     else:
         if args.export:
             report = export_report(
-                history, args.export, symbol=args.symbol, timeframe=args.timeframe, use_take_profit=args.take_profit
+                history, args.export, symbol=args.symbol, timeframe=args.timeframe, **strategy_kwargs
             )
             metrics = report["metrics"]
             print(f"Report written to {args.export}")
         else:
-            metrics = run_backtest(history, use_take_profit=args.take_profit)
+            metrics = run_backtest(history, **strategy_kwargs)
 
         for key, value in metrics.items():
             print(f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}")
