@@ -42,8 +42,11 @@ Which signal decides entries depends on config.USE_SETUP_ENGINE
     setup requires several independent pieces of evidence to agree
     (master prompt: "never treat an isolated pattern as a sufficient
     signal"). Exits
-    when the bias no longer supports the position or the context calls
-    no_trade. The stop-loss order is still placed exactly as before,
+    when the bias no longer supports the position, the context calls
+    no_trade, or a bearish chart pattern confirms — that last one does
+    NOT require bias agreement first, unlike the entry rule: closing a
+    position early is a lower evidence bar than opening one. The
+    stop-loss order is still placed exactly as before,
     just priced off the setup's structural invalidation level instead
     of a flat STOP_LOSS_PCT. Long-only, like the rest of this bot — a
     SHORT setup is detected but never acted on.
@@ -261,6 +264,17 @@ def _run_setup_engine_cycle(exchange) -> dict:
 
     long_setup = next((s for s in context.setups if s.direction == Direction.LONG), None)
     bullish_bias = context.bias.direction in (Bias.BULLISH, Bias.STRONG_BULLISH)
+    # A freshly-confirmed bearish chart pattern closes the position
+    # directly, on top of the bias/no_trade exits below — deliberately
+    # *not* gated on bias agreeing first, unlike CHART_PATTERN_REVERSAL's
+    # entry rule. Getting out early is risk-reducing, not risk-taking,
+    # so the bar is lower than for an entry. Only computed while actually
+    # holding something to exit.
+    bearish_pattern = (
+        bool(bearish_veto_mask(detect_reversal_patterns(execution), PATTERN_VETO_LOOKBACK).iloc[-1])
+        if in_position
+        else False
+    )
 
     action = "hold"
     order = None
@@ -277,11 +291,12 @@ def _run_setup_engine_cycle(exchange) -> dict:
             action = "buy"
             filled_amount = float(order.get("filled") or size)
             stop_order = place_stop_loss_order(exchange, SYMBOL, filled_amount, stop_reference)
-    elif in_position and (context.no_trade or not bullish_bias):
-        # The bias that justified this position is gone, or context
-        # says not to trade at all right now — cancel the protective
-        # stop first so it doesn't compete with this market sell for
-        # the same (currently locked) balance.
+    elif in_position and (context.no_trade or not bullish_bias or bearish_pattern):
+        # The bias that justified this position is gone, context says
+        # not to trade at all right now, or a bearish pattern just
+        # confirmed — cancel the protective stop first so it doesn't
+        # compete with this market sell for the same (currently locked)
+        # balance.
         for stale_order in get_open_stop_loss_orders(exchange, SYMBOL):
             cancel_order(exchange, SYMBOL, stale_order["id"])
         free_balance = get_base_asset_balance(exchange, SYMBOL)

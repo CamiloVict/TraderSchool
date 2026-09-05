@@ -303,7 +303,12 @@ cruce de EMA — la única razón para comprar es un setup `LONG`
 confirmado — y el stop-loss se ubica en el nivel de invalidación
 estructural del setup en vez del `STOP_LOSS_PCT` fijo. La salida (sin
 tocar el stop-loss real, que sigue igual) ocurre cuando el bias deja de
-ser alcista o el contexto pasa a `no_trade`. Apagado por defecto:
+ser alcista, el contexto pasa a `no_trade`, **o un patrón de vela
+bajista se confirma** en el timeframe de ejecución — esta última, a
+diferencia de la regla de entrada, no exige que el bias esté de acuerdo
+primero: cerrar antes de tiempo reduce riesgo en vez de tomarlo, así
+que el umbral de evidencia para salir es más bajo que para entrar.
+Apagado por defecto:
 cambia qué coloca las órdenes, y solo se probó contra los tests de este
 repo — nunca contra un feed de Testnet en vivo. Como necesita
 estructura semanal, el ciclo pasa a pedir `CONTEXT_HISTORY_DAYS` (540
@@ -399,7 +404,7 @@ python -m unittest test_context_validation test_context_structure \
                    test_context_setups test_context_state_machine -v
 ```
 
-O toda la suite del repo (151 tests) con `python -m unittest discover`.
+O toda la suite del repo (154 tests) con `python -m unittest discover`.
 
 ## Dashboard (React)
 
@@ -528,13 +533,18 @@ el resto del dashboard.
 - [x] `setup_engine_backtester.py`: backtest del ciclo del Setup Engine
   con ventana móvil de contexto (costo lineal, no cuadrático, en la
   cantidad de velas testeadas), reusando `compute_metrics()` de
-  `backtester.py`. `test_setup_engine_backtester.py` (9 tests): la
-  ventana nunca crece, `previous_state` viene de la propia iteración
-  anterior, P&L correcto contra un contexto simulado, los snapshots
-  llevan OHLC/volumen/equity para el dashboard, y un smoke test
-  end-to-end real (más lento, a propósito, para agarrar roturas de
-  integración que un mock no vería)
-- [x] 151 tests en total en el repo — `python -m unittest discover`
+  `backtester.py`. Además de stop-loss/bias-flip/no_trade, una salida
+  cierra directamente ante un patrón de vela bajista recién confirmado
+  en el timeframe de ejecución — sin exigir que el bias esté de acuerdo
+  primero (cerrar antes reduce riesgo, no lo toma, a diferencia de
+  entrar). `test_setup_engine_backtester.py` (11 tests): la ventana
+  nunca crece, `previous_state` viene de la propia iteración anterior,
+  P&L correcto contra un contexto simulado, la salida por patrón
+  bajista dispara con bias todavía alcista, los snapshots llevan
+  OHLC/volumen/equity para el dashboard, y un smoke test end-to-end
+  real (más lento, a propósito, para agarrar roturas de integración que
+  un mock no vería)
+- [x] 154 tests en total en el repo — `python -m unittest discover`
 
 ## Decisiones tomadas hasta ahora
 

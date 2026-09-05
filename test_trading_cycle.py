@@ -182,10 +182,16 @@ class RunTradingCycleTests(unittest.TestCase):
 
 def make_history_df(n: int, start_price: float = 10000.0, step: float = 10.0) -> pd.DataFrame:
     """A plausible-looking OHLCV history DataFrame, standing in for
-    what fetch_ohlcv_history would return. Its actual price shape
-    doesn't matter for the Setup Engine tests below — build_context()
-    itself is mocked there — it just has to be non-empty with a real
-    DatetimeIndex so build_timeframe_set() (not mocked) doesn't choke."""
+    what fetch_ohlcv_history would return. build_context() itself is
+    mocked in the Setup Engine tests below, so most of them don't care
+    about this data's actual price shape — it just has to be non-empty
+    with a real DatetimeIndex so build_timeframe_set() (not mocked)
+    doesn't choke. The one exception: the bearish-pattern exit check in
+    _run_setup_engine_cycle runs patterns.detect_reversal_patterns() on
+    this same history directly, unmocked — a monotonic trend (the
+    default `step`) has no interior swings and so never confirms a
+    pattern, which is why every other test here can ignore this and
+    only the bearish-pattern test below supplies its own shaped history."""
     rows = make_candles(n, start_price, step)
     df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
@@ -354,6 +360,29 @@ class SetupEngineTradingCycleTests(unittest.TestCase):
             result = main.run_trading_cycle(exchange)
 
         self.assertEqual(result["action"], "sell")
+
+    def test_bearish_pattern_closes_an_open_position_even_with_bullish_bias(self):
+        # Unlike test_bias_flip above, bias stays BULLISH and no_trade
+        # stays False on the mocked snapshot here -- the only reason
+        # this should sell is patterns.detect_reversal_patterns()
+        # running for real on the (unmocked) context history.
+        from test_patterns import double_top_closes, make_ohlc
+
+        base = SYMBOL.split("/")[0]
+        stale_stop = {"id": "stop-1", "side": "sell", "amount": 1.0, "triggerPrice": 9000.0}
+        exchange = FakeExchange(make_candles(5, 10000, 0), locked={base: 1.0}, open_orders=[stale_stop])
+        history = make_ohlc(double_top_closes())  # confirms its bearish break near its own end
+        snapshot = make_snapshot()  # default: bullish bias, no_trade=False, no setups
+
+        with patch("main.USE_SETUP_ENGINE", True), patch(
+            "data_fetcher.get_public_data_exchange", return_value=DummyContextExchange()
+        ), patch("data_fetcher.fetch_ohlcv_history", return_value=history), patch(
+            "context_engine.engine.build_context", return_value=snapshot
+        ):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "sell")
+        self.assertEqual(exchange.cancelled_ids, ["stop-1"])
 
     def test_self_heals_a_missing_stop_using_the_contexts_invalidation(self):
         base = SYMBOL.split("/")[0]

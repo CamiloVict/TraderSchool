@@ -54,8 +54,11 @@ export default function SetupEngineExplainer({
           </li>
           <li>
             <strong>Salida por señal:</strong> si el stop no se toca, la posición se cierra cuando
-            el sesgo deja de ser alcista o el estado de mercado pasa a <code>NO_TRADE</code> — no
-            espera un cruce de indicador.
+            el sesgo deja de ser alcista, el estado de mercado pasa a <code>NO_TRADE</code>, o un
+            patrón de vela bajista se confirma — esto último <em>no</em> exige que el sesgo esté de
+            acuerdo primero, a diferencia de la entrada: cerrar antes de tiempo es una decisión que
+            reduce riesgo, no una que lo toma, así que el umbral de evidencia es más bajo que para
+            entrar.
           </li>
           <li>
             <strong>Comisiones:</strong> cada entrada y salida descuenta {feePct ?? 0.1}% de

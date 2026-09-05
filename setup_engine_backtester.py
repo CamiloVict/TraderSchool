@@ -35,6 +35,13 @@ computed `market_state`, instead of main.py's trick of building
 context twice (once as-of the prior candle, to recover a previous
 state it has no other memory of). A backtest loop already has that
 memory for free.
+
+Exits, besides the stop-loss/bias-flip/no_trade ones already here, also
+fire directly on a freshly-confirmed bearish chart pattern (see the
+`bearish_pattern` check below) — deliberately *not* gated on bias
+agreeing first, unlike CHART_PATTERN_REVERSAL's entry rule. Closing a
+position early on weaker evidence is a different risk trade-off than
+opening one on it.
 """
 import json
 from datetime import datetime, timezone
@@ -46,6 +53,7 @@ from config import CONTEXT_HISTORY_DAYS, RISK_PER_TRADE_PCT, STOP_LOSS_PCT
 from context_engine.engine import build_context
 from context_engine.schema import Bias, Direction
 from context_engine.timeframes import build_timeframe_set
+from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
 from risk_manager import stop_loss_price
 
 SETUP_ENGINE_VERSION = "0.1.0"
@@ -127,11 +135,29 @@ def simulate_setup_engine(
                 total_fees_paid += fee
         elif position == 1:
             bullish = context.bias.direction in (Bias.BULLISH, Bias.STRONG_BULLISH)
-            if context.no_trade or not bullish:
+            # A freshly-confirmed bearish chart pattern closes the
+            # position directly, on top of (not instead of) the bias/
+            # no_trade exits below. Unlike CHART_PATTERN_REVERSAL's
+            # entry rule, this does *not* require HTF bias to agree
+            # first: getting out early is a risk-reducing action, not a
+            # risk-taking one, so the bar is deliberately lower than for
+            # an entry (same asymmetry the master prompt draws between
+            # entering and protecting an existing position). Computed
+            # lazily -- only while actually holding something to exit --
+            # to avoid doubling patterns.detect_reversal_patterns()'s
+            # cost on every candle of an already-slow backtest.
+            bearish_pattern = bool(bearish_veto_mask(detect_reversal_patterns(base), PATTERN_VETO_LOOKBACK).iloc[-1])
+            if context.no_trade or not bullish or bearish_pattern:
                 capital *= price / entry_price
                 fee = capital * TAKER_FEE_PCT / 100
                 capital -= fee
                 total_fees_paid += fee
+                if context.no_trade:
+                    exit_reason = "no_trade"
+                elif not bullish:
+                    exit_reason = "bias_flip"
+                else:
+                    exit_reason = "bearish_pattern"
                 trades.append(
                     {
                         "entry_time": entry_time,
@@ -139,7 +165,7 @@ def simulate_setup_engine(
                         "exit_time": timestamp,
                         "exit_price": float(price),
                         "return_pct": float((price / entry_price - 1) * 100),
-                        "exit_reason": "no_trade" if context.no_trade else "bias_flip",
+                        "exit_reason": exit_reason,
                         "stop_loss_price": float(stop_price) if stop_price is not None else None,
                     }
                 )

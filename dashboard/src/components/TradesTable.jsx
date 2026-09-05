@@ -10,6 +10,7 @@ const EXIT_REASON_LABELS = {
   signal: "Señal EMA",
   bias_flip: "Cambio de sesgo",
   no_trade: "No trade",
+  bearish_pattern: "Patrón bajista",
 };
 
 export default function TradesTable({ trades }) {

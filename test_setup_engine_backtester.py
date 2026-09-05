@@ -225,6 +225,39 @@ class PnLTests(unittest.TestCase):
         self.assertEqual(metrics["signal_exits"], 1)
         self.assertEqual(metrics["stop_loss_exits"], 0)
 
+    def test_exits_on_a_confirmed_bearish_pattern_even_with_bullish_bias_throughout(self):
+        # Unlike bias_flip, this exit is driven by patterns.py's real
+        # (unmocked) pattern detection running on the rolling window's
+        # own OHLC -- bias stays BULLISH on every mocked snapshot, so
+        # this only passes if the bearish-pattern check is a genuine
+        # extra exit path, not a side effect of the bias mock.
+        from test_patterns import double_top_closes, make_ohlc
+
+        # double_top_closes() confirms its break near its own end (see
+        # test_patterns.py); a flat 20-candle lead-in at the same price
+        # keeps the earlier tested candles pattern-free so entry (at the
+        # first tested candle) isn't immediately vetoed or exited.
+        history = make_ohlc([100.0] * 20 + double_top_closes())
+        setup = Setup(
+            name=SetupName.LIQUIDITY_SWEEP_RECLAIM,
+            direction=Direction.LONG,
+            reasons=["fake"],
+            invalidation=Invalidation(type="CLOSE_BELOW", level=50.0, detail="fake"),
+        )
+        calls = {"n": 0}
+
+        def fake_build_context(frames, asset=None, previous_state=None):
+            calls["n"] += 1
+            return make_snapshot(setups=[setup] if calls["n"] == 1 else [])
+
+        with patch("setup_engine_backtester.build_timeframe_set", return_value={}), patch(
+            "setup_engine_backtester.build_context", side_effect=fake_build_context
+        ):
+            metrics, trades, snapshots = seb.simulate_setup_engine(history, context_window_days=2, timeframe="1h")
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0]["exit_reason"], "bearish_pattern")
+
 
 class SnapshotEnrichmentTests(unittest.TestCase):
     """The dashboard's TradingChart/EquityChart expect OHLC + equity on
