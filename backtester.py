@@ -563,6 +563,8 @@ def export_report(
                 "return_pct": t["return_pct"],
                 "exit_reason": t["exit_reason"],
                 "stop_loss_price": t["stop_loss_price"],
+                "mae_pct": t["mae_pct"],
+                "mfe_pct": t["mfe_pct"],
             }
             for t in trades
         ],

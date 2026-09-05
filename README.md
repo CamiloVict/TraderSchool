@@ -112,6 +112,21 @@ que un segmento puede mostrar retorno positivo con 0% de win rate si
 sus únicas operaciones cerradas perdieron pero terminó con una
 ganancia de papel sin cerrar.
 
+**`scalping_backtester.py --take-profit`** (BTC): a diferencia del
+`--take-profit` de `backtester.py` (un % fijo, probado y descartado
+para una estrategia de tendencia), acá el take-profit es el mismo
+nivel de zona-premium (`range_low + premium_min% del rango`) que ya se
+calculaba para el filtro de reward:risk en la entrada, nunca usado
+antes como salida real — la salida seguía siendo solo el stop o la
+señal de rango apagándose sola. Tiene mucho más sentido para una
+estrategia de reversión a la media ("comprar el descuento, vender la
+prima") que para una de tendencia, así que vale la pena probarlo antes
+de descartarlo por la misma razón que el de PAXG:
+
+```bash
+python scalping_backtester.py --days 90 --walk-forward 3 --take-profit
+```
+
 **Usá `--source real`** (Binance real, datos públicos, sin API key, sin
 riesgo — no coloca órdenes) en vez del default `--source testnet`. El
 testnet solo guarda una ventana corta de velas (en la práctica, unas
@@ -948,3 +963,28 @@ Dinero real sigue siendo una decisión aparte y deliberada (ver
   en vivo (vela por vela, no la última cacheada) sí requeriría un
   backend — decisión que prefiero discutir contigo antes de
   construirla.
+- **Resultado real de `--walk-forward 3` sobre los últimos 90 días**
+  (`--days 90 --walk-forward 3`, corrido 2026-09-05 — un punto en el
+  tiempo, no una garantía permanente; las condiciones de mercado
+  cambian):
+  - **PAXG (EMA), el bot que sí está en producción**: 2/3 segmentos de
+    30 días ganadores (+0.45%, +0.71%), pero el del medio perdió
+    -0.91% con solo 1 de 10 operaciones ganadoras (`profit_factor`
+    0.08) — probablemente un tramo lateral/picado donde el cruce de
+    EMA generó varias entradas falsas, la debilidad clásica de una
+    estrategia de tendencia sin tendencia. Conclusión: los +0.87%/
+    +1.42% de backtests puntuales de 30 días vistos antes en esta
+    sesión eran el mejor de tres tramos posibles, no un promedio
+    representativo — no asumir que el próximo mes se parece al último
+    que se vio bien.
+  - **BTC scalping (`scalping_backtester.py`), nunca conectado a
+    `main.py --trade`**: **0/3 segmentos ganadores** (-2.87%, -1.93%,
+    -2.78%), con `profit_factor` empeorando en cada tramo (0.60 → 0.40
+    → 0.18). El peor tramo coincide con una suba real de BTC del
+    +24.24% — la firma de una estrategia de reversión a la media
+    peleando contra un mercado que rompió el rango y no volvió. Esto
+    confirma, con tres ventanas independientes en vez de una sola, lo
+    que ya sugerían los backtests previos (-32% → -2.99% → -2.81% a
+    medida que se ajustaba). **Decisión: no conectar este bot a
+    `main.py --trade` mientras no muestre una ventaja real** — seguir
+    afinándolo es un proyecto de tuneo aparte, no algo a apurar.

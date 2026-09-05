@@ -16,3 +16,13 @@
   verificación que necesite datos reales (backtests con historial real,
   confirmar que el cron corrió, revisar archivos locales) hay que
   pedírsela a él con el comando exacto a correr.
+- **SIEMPRE testear cualquier implementación/experimento nuevo de
+  backtest contra los DOS bots — PAXG/oro (`backtester.py`) y BTC
+  (`scalping_backtester.py`) — no solo uno.** Aunque uno de los dos no
+  esté (todavía) conectado a `main.py --trade`, sigue siendo parte del
+  repo y una implementación nueva (una métrica, un flag, un chequeo
+  como `--walk-forward`) tiene que darle al usuario el comando para
+  correrla en ambos, no en el que sea más cómodo/relevante en el
+  momento. Si un concepto no aplica 1:1 a los dos (p.ej. algo pensado
+  específicamente para el cruce de EMA), decirlo explícitamente en vez
+  de omitir el otro bot en silencio.

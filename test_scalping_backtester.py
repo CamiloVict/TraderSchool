@@ -7,6 +7,7 @@ import unittest
 import pandas as pd
 
 from scalping_backtester import _simulate
+from scalping_strategy import PREMIUM_MIN, add_signals
 from test_scalping_strategy import _sharp_dip_then_bounce, make_df
 
 
@@ -73,6 +74,45 @@ class RewardRiskFilterTests(unittest.TestCase):
         metrics, _, trades = _simulate(df, initial_capital=1000.0, min_reward_risk_ratio=1.5)
 
         self.assertEqual(len(trades), 1)
+
+
+class TakeProfitWiringTests(unittest.TestCase):
+    """Unlike backtester.py's flat-%% --take-profit (tested and dropped
+    for a trend-following strategy), this one exits at the premium-zone
+    target already computed for the reward:risk entry gate -- a natural
+    fit for a mean-reversion strategy's own "buy the discount, sell the
+    premium" premise."""
+
+    def _dip_then_sustained_rise(self):
+        closes = _sharp_dip_then_bounce()
+        for _ in range(25):  # sustained rise back up through the range
+            closes.append(closes[-1] + 4)
+        return closes
+
+    def test_take_profit_exits_at_the_premium_zone_target(self):
+        closes = self._dip_then_sustained_rise()
+        df = make_df(closes)
+        data = add_signals(df)
+        entry_ts = data.index[data["signal"].diff() == 1][0]
+        entry_row = data.loc[entry_ts]
+        expected_target = entry_row["range_low"] + (PREMIUM_MIN / 100) * (
+            entry_row["range_high"] - entry_row["range_low"]
+        )
+
+        metrics, _, trades = _simulate(df, initial_capital=1000.0, use_take_profit=True)
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0]["exit_reason"], "take_profit")
+        self.assertAlmostEqual(trades[0]["exit_price"], expected_target, places=6)
+
+    def test_flag_off_still_exits_on_the_range_signal_as_before(self):
+        closes = self._dip_then_sustained_rise()
+        df = make_df(closes)
+
+        metrics, _, trades = _simulate(df, initial_capital=1000.0, use_take_profit=False)
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0]["exit_reason"], "signal")
 
 
 if __name__ == "__main__":

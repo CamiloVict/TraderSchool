@@ -61,11 +61,22 @@ def _simulate(
     initial_capital: float,
     stop_buffer_atr_multiple: float = STOP_BUFFER_ATR_MULTIPLE,
     min_reward_risk_ratio: float = MIN_REWARD_RISK_RATIO,
+    use_take_profit: bool = False,
     **strategy_kwargs,
 ):
     """Core simulation loop, shared by run_backtest() and export_report().
     `strategy_kwargs` are passed straight through to
     scalping_strategy.add_signals (lookback, rsi_period, discount_max, ...).
+
+    `use_take_profit`: unlike backtester.py's own --take-profit
+    experiment (a flat % that made sense to test and then discard for
+    a *trend-following* strategy), this one is a natural fit for a
+    *mean-reversion* strategy: `target_price` (the premium-zone level)
+    is already computed below for the reward:risk entry gate, just
+    never used as an actual exit -- entries only ever closed on the
+    stop or on the range signal itself turning off. Off by default
+    until tested against real data, same posture as every other
+    opt-in flag in this repo.
 
     Returns (metrics: dict, data: DataFrame with equity/drawdown columns
     added, trades: list of per-trade dicts) -- same shape as
@@ -83,6 +94,7 @@ def _simulate(
     entry_price = 0.0
     entry_time = None
     stop_price = None
+    target_price = None
     size = 0.0  # base-asset units held while in position
     trades = []
     equity_curve = []
@@ -91,6 +103,7 @@ def _simulate(
     for timestamp, row in data.iterrows():
         price = row["close"]
         low = row["low"]
+        high = row["high"]
         signal = row["signal"]
 
         if position == 1 and stop_price is not None and low <= stop_price:
@@ -112,6 +125,30 @@ def _simulate(
             )
             position = 0
             stop_price = None
+            target_price = None
+            size = 0.0
+        elif position == 1 and target_price is not None and high >= target_price:
+            # Same intra-candle-first priority as the stop-loss check
+            # above, ahead of the range signal turning off on its own.
+            exit_price = target_price
+            proceeds = size * exit_price
+            fee = proceeds * TAKER_FEE_PCT / 100
+            capital = capital - (size * entry_price) + proceeds - fee
+            total_fees_paid += fee
+            trades.append(
+                {
+                    "entry_time": entry_time,
+                    "entry_price": float(entry_price),
+                    "exit_time": timestamp,
+                    "exit_price": float(exit_price),
+                    "return_pct": float((exit_price / entry_price - 1) * 100),
+                    "exit_reason": "take_profit",
+                    "stop_loss_price": float(stop_price) if stop_price is not None else None,
+                }
+            )
+            position = 0
+            stop_price = None
+            target_price = None
             size = 0.0
         elif position == 0 and signal == 1:
             atr_price = row["atr_pct"] / 100 * price
@@ -139,6 +176,7 @@ def _simulate(
                 entry_price = price
                 entry_time = timestamp
                 stop_price = float(candidate_stop)
+                target_price = float(target_price) if use_take_profit else None
                 size = candidate_size
                 cost = size * entry_price
                 fee = cost * TAKER_FEE_PCT / 100
@@ -162,6 +200,7 @@ def _simulate(
             )
             position = 0
             stop_price = None
+            target_price = None
             size = 0.0
 
         if position == 1:
@@ -247,6 +286,7 @@ def export_report(
                 "(falls back to flat stop_loss_pct if degenerate)"
             ),
             "min_reward_risk_ratio": strategy_kwargs.get("min_reward_risk_ratio", MIN_REWARD_RISK_RATIO),
+            "take_profit_at_premium_target": strategy_kwargs.get("use_take_profit", False),
         },
         "metrics": metrics,
         "candles": candles,
@@ -259,6 +299,8 @@ def export_report(
                 "return_pct": t["return_pct"],
                 "exit_reason": t["exit_reason"],
                 "stop_loss_price": t["stop_loss_price"],
+                "mae_pct": t["mae_pct"],
+                "mfe_pct": t["mfe_pct"],
             }
             for t in trades
         ],
@@ -296,6 +338,19 @@ if __name__ == "__main__":
             "Prints a per-segment comparison; ignores --export."
         ),
     )
+    parser.add_argument(
+        "--take-profit",
+        action="store_true",
+        help=(
+            "Opt-in take-profit at the premium-zone target already computed "
+            "for the reward:risk entry gate (row['range_low'] + premium_min%% "
+            "of the range), checked against the candle's high. Unlike "
+            "backtester.py's own --take-profit (a flat %% tested and dropped "
+            "for a trend-following strategy), a defined target fits this "
+            "mean-reversion strategy's own premise -- off by default until "
+            "tested against real data, same as every other opt-in flag here."
+        ),
+    )
     args = parser.parse_args()
 
     exchange = get_public_data_exchange()
@@ -320,7 +375,7 @@ if __name__ == "__main__":
             "profit_factor",
         )
         for i, segment in enumerate(segments, start=1):
-            segment_metrics = run_backtest(segment)
+            segment_metrics = run_backtest(segment, use_take_profit=args.take_profit)
             segment_returns.append(segment_metrics["total_return_pct"])
             print(
                 f"--- Segment {i}/{args.walk_forward}: {segment.index.min()} -> "
@@ -338,11 +393,13 @@ if __name__ == "__main__":
         )
     else:
         if args.export:
-            report = export_report(history, args.export, symbol=args.symbol, timeframe=args.timeframe)
+            report = export_report(
+                history, args.export, symbol=args.symbol, timeframe=args.timeframe, use_take_profit=args.take_profit
+            )
             metrics = report["metrics"]
             print(f"Report written to {args.export}")
         else:
-            metrics = run_backtest(history)
+            metrics = run_backtest(history, use_take_profit=args.take_profit)
 
         for key, value in metrics.items():
             print(f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}")
