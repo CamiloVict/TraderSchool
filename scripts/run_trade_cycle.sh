@@ -25,24 +25,27 @@ cd "$REPO_ROOT"
 if [ -f ".venv/bin/activate" ]; then
     # shellcheck disable=SC1091
     source .venv/bin/activate
-    PYTHON_BIN="python"
-else
-    # No venv: fall back to whatever interpreter is actually on this
-    # machine. Prefer python3.9 specifically -- see the README's note on
-    # the `X | None` syntax regression that only shows up on 3.9 -- then
-    # python3, then a bare `python` last (recent macOS/Linux often don't
-    # ship one at all).
-    PYTHON_BIN=""
-    for candidate in python3.9 python3 python; do
-        if command -v "$candidate" >/dev/null 2>&1; then
-            PYTHON_BIN="$candidate"
-            break
-        fi
-    done
-    if [ -z "$PYTHON_BIN" ]; then
-        echo "run_trade_cycle.sh: no python interpreter found (checked python3.9, python3, python)" >&2
-        exit 1
+fi
+
+# Resolve the interpreter to run by name rather than assuming a plain
+# `python` exists -- true with no venv at all (recent macOS/Linux often
+# don't ship a bare `python`), and also true for a venv that lost its
+# own `python` symlink (e.g. moved to a new path after creation) but
+# still has its versioned binary. Once .venv/bin is on $PATH (if it was
+# activated above), `command -v` finds the venv's own interpreter
+# first; otherwise it falls through to whatever is on the system.
+# python3.9 specifically first -- see the README's note on the
+# `X | None` syntax regression that only shows up on 3.9.
+PYTHON_BIN=""
+for candidate in python3.9 python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        PYTHON_BIN="$candidate"
+        break
     fi
+done
+if [ -z "$PYTHON_BIN" ]; then
+    echo "run_trade_cycle.sh: no python interpreter found (checked python3.9, python3, python)" >&2
+    exit 1
 fi
 
 set +e
