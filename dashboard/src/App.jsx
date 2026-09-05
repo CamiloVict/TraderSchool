@@ -1,112 +1,61 @@
 import { useEffect, useState } from "react";
 
-import EquityChart from "./components/EquityChart";
 import KpiCard from "./components/KpiCard";
 import LiveTradesPanel from "./components/LiveTradesPanel";
 import MarketContext from "./components/MarketContext";
-import SetupEngineExplainer from "./components/SetupEngineExplainer";
-import StrategyExplainer from "./components/StrategyExplainer";
-import TradesTable from "./components/TradesTable";
-import TradingChart from "./components/TradingChart";
-import { formatDateTime, formatHours, formatPct, formatUsd } from "./lib/format";
+import PositionChart from "./components/PositionChart";
+import { formatDateTime, formatPct, formatUsd } from "./lib/format";
+import { deriveOpenPosition } from "./lib/position";
 
 import "./App.css";
 
 const DATA_DIR = "/data";
-const REPORTS_MANIFEST_URL = `${DATA_DIR}/reports.json`;
-// Falls back to this single entry if reports.json is missing, so a
-// dashboard set up before the manifest existed still works.
-const DEFAULT_REPORTS = [{ label: "Backtest", file: "backtest.json", context: "context.json" }];
+// Real OHLC history, exported by `python backtester.py --export ...`.
+// Reused here purely as cached price history for the chart background
+// — none of its strategy/metrics fields are read or shown anymore; see
+// the "Falta para producción" history in README for why this dashboard
+// moved from "backtest viewer" to "what is the live bot actually doing."
+const CANDLES_URL = `${DATA_DIR}/backtest_paxg.json`;
+const TRADE_JOURNAL_URL = `${DATA_DIR}/trade_journal.json`;
+const CONTEXT_URL = `${DATA_DIR}/context_paxg.json`;
 
 export default function App() {
-  const [reports, setReports] = useState(DEFAULT_REPORTS);
-  const [selectedFile, setSelectedFile] = useState(DEFAULT_REPORTS[0].file);
-  const [report, setReport] = useState(null);
+  const [priceReport, setPriceReport] = useState(null);
+  const [trades, setTrades] = useState(null);
   const [context, setContext] = useState(null);
-  const [error, setError] = useState(null);
 
-  const selectedContextFile = reports.find((r) => r.file === selectedFile)?.context;
-
-  // The market context is optional and independent of the backtest, so
-  // a missing file (or a report entry with no `context` at all) resolves
-  // to null and the panel explains how to generate it rather than
-  // breaking the dashboard. Re-fetches whenever the selected report
-  // changes, so switching symbols (e.g. PAXG <-> BTC) shows that
-  // symbol's own context instead of whatever loaded first.
   useEffect(() => {
-    setContext(null);
-    if (!selectedContextFile) return;
-    fetch(`${DATA_DIR}/${selectedContextFile}`)
+    fetch(CANDLES_URL)
       .then((res) => (res.ok ? res.json() : null))
       .catch(() => null)
-      .then(setContext);
-  }, [selectedContextFile]);
-
-  useEffect(() => {
-    fetch(REPORTS_MANIFEST_URL)
-      .then((res) => (res.ok ? res.json() : DEFAULT_REPORTS))
-      .catch(() => DEFAULT_REPORTS)
-      .then((list) => {
-        const safeList = Array.isArray(list) && list.length ? list : DEFAULT_REPORTS;
-        setReports(safeList);
-        setSelectedFile(safeList[0].file);
-      });
+      .then(setPriceReport);
   }, []);
 
   useEffect(() => {
-    if (!selectedFile) return;
-    setReport(null);
-    setError(null);
-    fetch(`${DATA_DIR}/${selectedFile}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then(setReport)
-      .catch((err) => setError(err.message));
-  }, [selectedFile]);
+    fetch(TRADE_JOURNAL_URL)
+      .then((res) => (res.ok ? res.json() : null))
+      .catch(() => null)
+      .then(setTrades);
+  }, []);
 
-  if (error) {
-    return (
-      <div className="app-shell app-shell--center">
-        <div className="panel">
-          <h2>No se pudo cargar el reporte</h2>
-          <p className="text-dim">
-            No encontré <code>{DATA_DIR}/{selectedFile}</code>. Generalo corriendo, desde la raíz
-            del proyecto:
-          </p>
-          <pre className="code-block">
-            python backtester.py --export dashboard/public{DATA_DIR}/{selectedFile}
-          </pre>
-        </div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    fetch(CONTEXT_URL)
+      .then((res) => (res.ok ? res.json() : null))
+      .catch(() => null)
+      .then(setContext);
+  }, []);
 
-  if (!report) {
-    return (
-      <div className="app-shell app-shell--center">
-        <p className="text-dim">Cargando reporte de backtest...</p>
-      </div>
-    );
-  }
+  const candles = priceReport?.candles ?? [];
+  const symbol = priceReport?.symbol ?? context?.asset ?? "—";
+  const timeframe = priceReport?.timeframe ?? "1h";
 
-  const {
-    metrics,
-    candles,
-    trades,
-    symbol,
-    timeframe,
-    strategy,
-    engine,
-    context_window_days: contextWindowDays,
-    risk_management: riskManagement,
-    backtest_assumptions: backtestAssumptions,
-    generated_at,
-    is_demo,
-  } = report;
-
-  const isSetupEngine = engine === "setup_engine";
+  const position = deriveOpenPosition(trades);
+  const lastCandle = candles.length ? candles[candles.length - 1] : null;
+  const currentPrice = lastCandle?.close;
+  const pnlPct =
+    position && currentPrice != null
+      ? ((currentPrice - position.entryPrice) / position.entryPrice) * 100
+      : null;
 
   return (
     <div className="app-shell">
@@ -114,110 +63,40 @@ export default function App() {
         <div>
           <h1>Trading Bot Dashboard</h1>
           <p className="text-dim">
-            {symbol} · {timeframe} ·{" "}
-            {isSetupEngine
-              ? `Setup Engine (ventana ${contextWindowDays ?? "?"}d)`
-              : `EMA ${strategy.fast_ema}/${strategy.slow_ema}`}{" "}
-            · generado {formatDateTime(generated_at)}
+            {symbol} · {timeframe} · en vivo contra Testnet
           </p>
         </div>
         <div className="app-header__actions">
-          {is_demo && <span className="badge badge--demo">DATOS DEMO (sintéticos)</span>}
-          {reports.length > 1 && (
-            <select
-              className="report-select"
-              value={selectedFile}
-              onChange={(e) => setSelectedFile(e.target.value)}
-              aria-label="Elegir backtest"
-            >
-              {reports.map((r) => (
-                <option key={r.file} value={r.file}>
-                  {r.label}
-                </option>
-              ))}
-            </select>
-          )}
+          {position ? (
+            <span className="badge badge--positive">En posición</span>
+          ) : trades ? (
+            <span className="badge badge--neutral">Sin posición</span>
+          ) : null}
         </div>
       </header>
 
-      <MarketContext context={context} />
-      <LiveTradesPanel />
-
-      {isSetupEngine ? (
-        <SetupEngineExplainer
-          symbol={symbol}
-          timeframe={timeframe}
-          contextWindowDays={contextWindowDays}
-          riskManagement={riskManagement}
-          backtestAssumptions={backtestAssumptions}
-        />
-      ) : (
-        <StrategyExplainer
-          symbol={symbol}
-          timeframe={timeframe}
-          strategy={strategy}
-          riskManagement={riskManagement}
-          backtestAssumptions={backtestAssumptions}
-        />
+      {position && (
+        <section className="kpi-grid">
+          <KpiCard label="Precio de entrada" value={formatUsd(position.entryPrice)} sublabel={formatDateTime(position.entryTime)} />
+          <KpiCard
+            label="Precio actual"
+            value={currentPrice != null ? formatUsd(currentPrice) : "—"}
+            sublabel="última vela cacheada, no un feed en vivo"
+          />
+          <KpiCard
+            label="P&L no realizado"
+            value={pnlPct != null ? formatPct(pnlPct) : "—"}
+            tone={pnlPct != null ? (pnlPct >= 0 ? "positive" : "negative") : "neutral"}
+          />
+          <KpiCard label="Cantidad" value={position.amount ?? "—"} sublabel={position.symbol} />
+        </section>
       )}
 
-      <section className="kpi-grid">
-        <KpiCard
-          label="Retorno total"
-          value={formatPct(metrics.total_return_pct)}
-          sublabel={`buy & hold: ${formatPct(metrics.buy_hold_return_pct)}`}
-          tone={metrics.total_return_pct >= 0 ? "positive" : "negative"}
-        />
-        <KpiCard
-          label="Capital final"
-          value={formatUsd(metrics.final_capital)}
-          sublabel={`desde ${formatUsd(metrics.initial_capital)}`}
-        />
-        <KpiCard
-          label="Win rate"
-          value={formatPct(metrics.win_rate_pct, 1)}
-          tone={metrics.win_rate_pct >= 50 ? "positive" : "neutral"}
-        />
-        <KpiCard label="Drawdown máximo" value={formatPct(metrics.max_drawdown_pct)} tone="negative" />
-        <KpiCard
-          label="Operaciones"
-          value={metrics.num_trades}
-          sublabel={
-            metrics.stop_loss_exits != null
-              ? `${metrics.signal_exits} por señal · ${metrics.stop_loss_exits} por stop-loss`
-              : undefined
-          }
-        />
-        <KpiCard
-          label="Retorno prom. / operación"
-          value={formatPct(metrics.avg_trade_return_pct)}
-          tone={metrics.avg_trade_return_pct >= 0 ? "positive" : "negative"}
-        />
-        <KpiCard
-          label="Mejor / peor operación"
-          value={`${formatPct(metrics.best_trade_pct)} / ${formatPct(metrics.worst_trade_pct)}`}
-        />
-        <KpiCard label="Duración prom. posición" value={formatHours(metrics.avg_trade_duration_hours)} />
-        <KpiCard
-          label="Comisiones pagadas"
-          value={formatUsd(metrics.total_fees_paid)}
-          sublabel={
-            backtestAssumptions?.taker_fee_pct != null
-              ? `${backtestAssumptions.taker_fee_pct}% por operación`
-              : undefined
-          }
-        />
-      </section>
+      <PositionChart candles={candles} trades={trades ?? []} position={position} />
 
-      <TradingChart candles={candles} trades={trades} />
-      <EquityChart candles={candles} initialCapital={metrics.initial_capital} />
-      <TradesTable trades={trades} />
+      <LiveTradesPanel trades={trades} />
 
-      <footer className="app-footer text-dim">
-        Resultado de backtest, no es consejo financiero. Simulación long-only con stop-loss real,
-        comisión {backtestAssumptions?.taker_fee_pct ?? 0.1}% por operación, sin slippage — el
-        desempeño en testnet/real puede diferir.
-      </footer>
+      <MarketContext context={context} />
     </div>
   );
 }

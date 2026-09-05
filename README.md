@@ -182,18 +182,22 @@ forma en vez de aprenderla; un paso natural una vez que haya datos de
 verdad. Igual que las notificaciones, es best-effort: un fallo acá
 queda logueado pero nunca tira abajo el ciclo de trading.
 
-**Para verlo en el dashboard** (panel "Historial real de operaciones",
-siempre visible arriba, independiente del reporte seleccionado): copiá
-el archivo a la carpeta que sirve el dashboard y refrescá.
+**Para verlo en el dashboard** (posición abierta + historial real,
+arriba de todo): si corrés `--trade` vía `scripts/run_trade_cycle.sh`
+(cron o el timer de systemd de la sección anterior), el script ya copia
+`data/trade_journal.json` a `dashboard/public/data/trade_journal.json`
+al final de cada ciclo — no hace falta ningún `cp` a mano, solo
+refrescar la página del dashboard después de una corrida. Si en cambio
+corrés `main.py --trade` directo (sin el wrapper), copiá el archivo vos
+mismo:
 
 ```bash
 cp data/trade_journal.json dashboard/public/data/trade_journal.json
 ```
 
-No se hace automático ni se commitea — son datos reales de tu cuenta,
-a diferencia de los `backtest*.json` de al lado, que sí son demo/backtest
-y están pensados para compartirse. Repetí el `cp` cada vez que quieras
-ver operaciones nuevas.
+El archivo copiado no se commitea — son datos reales de tu cuenta, a
+diferencia de los `backtest*.json` de al lado, que sí son demo/backtest
+y están pensados para compartirse.
 
 ### Dead man's switch (`heartbeat.py`, opt-in)
 
@@ -544,64 +548,44 @@ npm install
 npm run dev
 ```
 
-Panel visual del backtest, con gráfico de velas real (librería
+Panel de lo que el bot **hizo de verdad** contra Testnet, no un visor
+de backtests. Gráfico de velas real (librería
 [lightweight-charts](https://tradingview.github.io/lightweight-charts/),
-de TradingView) en vez de un simple gráfico de líneas: KPIs (retorno
-vs. buy & hold, win rate, drawdown, mejor/peor operación, duración
-promedio, comisiones pagadas, cuántas salidas fueron por stop-loss vs.
-por señal), velas OHLC con EMA rápida/lenta y flechas de
-compra/venta/stop-loss, curva de equity, tabla de operaciones (con
-motivo de salida y duración), y un panel plegable "¿Cómo funciona esta
-estrategia?" que explica la lógica en lenguaje simple con los números
-reales del reporte cargado. Ver `dashboard/README.md`.
+de TradingView) con la posición abierta marcada encima: si hay una
+compra sin su venta correspondiente, se dibuja una línea en el precio
+de entrada y arriba unas tarjetas con precio de entrada, precio actual,
+P&L no realizado y cantidad. Las compras/ventas reales quedan marcadas
+sobre las velas como flechas. Debajo, la tabla completa del historial
+real de operaciones (`data/trade_journal.json`). El contexto de mercado
+(régimen, liquidez, bias del `context_engine`) va en un panel plegable
+al final — es lectura de fondo, no lo primero que hay que mirar. Ver
+`dashboard/README.md`.
 
-Es un panel **estático**, no en vivo: lee un JSON generado por
-`backtester.py`:
+Sigue sin haber backend: todo sale de JSON estáticos en
+`dashboard/public/data/`.
 
-```bash
-python backtester.py --export dashboard/public/data/backtest.json
-```
+- **Historial real / posición abierta** (`trade_journal.json`): lo
+  escribe `trade_journal.py` en cada ciclo de `main.py --trade`, en
+  `data/trade_journal.json`. Si corrés el bot vía
+  `scripts/run_trade_cycle.sh` (cron o el timer de systemd, ver más
+  abajo), ese archivo se copia solo a
+  `dashboard/public/data/trade_journal.json` en cada corrida — **no
+  hace falta ningún `cp` manual** una vez que el cron está instalado.
+  Son datos reales de tu cuenta: nunca se commitean (`.gitignore`).
+- **Precio de fondo** (`backtest_paxg.json`): velas OHLC reales para
+  dibujar el gráfico, generadas una vez (y regeneradas cuando quieras
+  refrescar el historial) con:
 
-El backtest ahora simula el mismo stop-loss real que corre en Testnet:
-una operación se cierra por lo que ocurra primero, el precio tocando
-el stop o la EMA cruzando de vuelta — no solo por el cruce de EMA como
-antes. Si ya tenías un `backtest.json`/`backtest_paxg.json` generado
-con una versión anterior de `backtester.py`, el dashboard lo sigue
-mostrando (con datos degradados: velas sin mecha, sin distinguir
-motivo de salida) — regeneralo para ver el detalle completo.
+  ```bash
+  python backtester.py --export dashboard/public/data/backtest_paxg.json
+  ```
 
-**Para comparar varios símbolos** (por ejemplo oro/PAXG y BTC) en el
-mismo dashboard, exportá cada uno a un archivo distinto (backtest +
-contexto) y agregalo a `dashboard/public/data/reports.json`:
-
-```bash
-python backtester.py --export dashboard/public/data/backtest_paxg.json     # PAXG (SYMBOL del .env)
-SYMBOL="BTC/USDT" python backtester.py --export dashboard/public/data/backtest.json
-python -m context_engine --symbol PAXG/USDT --export dashboard/public/data/context_paxg.json
-python -m context_engine --symbol BTC/USDT --export dashboard/public/data/context.json
-```
-
-```json
-[
-  { "label": "PAXG/USDT (oro)", "file": "backtest_paxg.json", "context": "context_paxg.json" },
-  { "label": "BTC/USDT", "file": "backtest.json", "context": "context.json" }
-]
-```
-
-El dashboard muestra un selector arriba a la derecha cuando hay más de
-un reporte listado. Ya incluye datos de ejemplo sintéticos para ambos
-(marcados como demo en el propio dashboard) para que no se vea vacío
-hasta que corras tus propios backtests. PAXG/USDT (oro) aparece primero
-y es el seleccionado por default, siguiendo el foco del bot.
-
-Arriba de todo hay además un panel **"Contexto de mercado"**, que lee
-el archivo indicado en el campo `context` de la entrada de
-`reports.json` actualmente seleccionada (el que exporta
-`context_engine`) — cada símbolo tiene su propio contexto, y cambiar el
-selector recarga el panel con el del símbolo elegido. Es independiente
-del backtest: si el campo `context` falta o el archivo no existe, el
-panel se repliega solo y explica el comando para generarlo, sin romper
-el resto del dashboard.
+  Ninguna métrica de backtest (retorno, win rate, equity, etc.) se
+  muestra ya en el dashboard — esas quedaron solo en la salida de
+  `backtester.py` por consola/JSON crudo.
+- **Contexto de mercado** (`context_paxg.json`, opcional): generado con
+  `python -m context_engine --export dashboard/public/data/context_paxg.json`.
+  Si no existe, el panel se repliega solo y explica el comando.
 
 ## Estado del proyecto
 
@@ -826,11 +810,15 @@ Dinero real sigue siendo una decisión aparte y deliberada (ver
   en el exchange — `risk_manager.take_profit_price()` está calculado
   pero no se usa; una salida favorable todavía espera el cruce inverso
   de EMA, no un objetivo fijo.
-- **Dashboard sin backend, por ahora**: en vez de levantar una API
-  (FastAPI/Flask) para que React consuma datos en vivo, el dashboard
-  lee un JSON estático exportado por `backtester.py`. Es la opción más
-  simple para "ver los resultados del backtest" — que es lo que
-  necesitábamos ahora — sin sumar un servidor a mantener. Si más
-  adelante quieres ver la posición/balance en vivo (no solo backtests),
-  eso sí requiere un pequeño backend — decisión de arquitectura que
-  prefiero discutir contigo antes de construirla.
+- **Dashboard sin backend**: en vez de levantar una API (FastAPI/Flask)
+  para que React consuma datos en vivo, el dashboard lee JSON estáticos
+  que `main.py --trade` y sus scripts van dejando en
+  `dashboard/public/data/` (`trade_journal.json` para la posición
+  abierta y el historial real, `backtest_paxg.json` como fondo de
+  precio, `context_paxg.json` opcional). `scripts/run_trade_cycle.sh`
+  ya copia `trade_journal.json` al dashboard en cada ciclo de cron, así
+  que "posición abierta en vivo" no necesitó un servidor propio — solo
+  refrescar la página después de un ciclo. Un feed de precio realmente
+  en vivo (vela por vela, no la última cacheada) sí requeriría un
+  backend — decisión que prefiero discutir contigo antes de
+  construirla.

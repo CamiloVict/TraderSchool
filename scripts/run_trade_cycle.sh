@@ -27,4 +27,20 @@ if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 fi
 
-exec python main.py --trade
+set +e
+python main.py --trade
+STATUS=$?
+set -e
+
+# Keep the dashboard's "real trade history / open position" view current
+# without a manual `cp` after every run: trade_journal.py already wrote
+# the authoritative copy to data/trade_journal.json above (best-effort,
+# never fails the cycle), so mirror it into the dashboard's public data
+# dir here too. Best-effort on purpose, same as trade_journal.py itself
+# -- a copy failure (e.g. dashboard/ not present on this box) must never
+# fail the cron job or mask main.py's own exit code.
+if [ -f "data/trade_journal.json" ] && [ -d "dashboard/public/data" ]; then
+    cp "data/trade_journal.json" "dashboard/public/data/trade_journal.json" || true
+fi
+
+exit "$STATUS"

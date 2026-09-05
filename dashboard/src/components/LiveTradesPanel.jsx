@@ -1,5 +1,3 @@
-import { useEffect, useState } from "react";
-
 import { formatDateTime, formatUsd } from "../lib/format";
 
 const DATA_DIR = "/data";
@@ -8,17 +6,10 @@ const DATA_DIR = "/data";
 // not a demo/backtest artifact -- unlike backtest.json, this file is
 // never meant to be committed (see dashboard/.gitignore) and has to be
 // copied in locally, so a missing file is the *expected* state on a
-// fresh checkout, not an error to alarm about.
-export default function LiveTradesPanel() {
-  const [trades, setTrades] = useState(null);
-
-  useEffect(() => {
-    fetch(`${DATA_DIR}/trade_journal.json`)
-      .then((res) => (res.ok ? res.json() : null))
-      .catch(() => null)
-      .then(setTrades);
-  }, []);
-
+// fresh checkout, not an error to alarm about. `trades` is fetched once
+// in App.jsx (it also needs it to derive the open position) and passed
+// down rather than fetched again here.
+export default function LiveTradesPanel({ trades }) {
   if (!trades || trades.length === 0) {
     return (
       <div className="panel">

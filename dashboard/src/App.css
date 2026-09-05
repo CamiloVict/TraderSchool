@@ -48,19 +48,20 @@
   color: #241a05;
 }
 
+.badge--positive {
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+.badge--neutral {
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+
 .app-header__actions {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-
-.report-select {
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 10px;
-  font-size: 13px;
 }
 
 .kpi-grid {
@@ -127,6 +128,27 @@
 
 .panel__note {
   font-size: 11px;
+}
+
+/* A <summary> made to look and lay out like .panel__header, for panels
+   that are secondary reading rather than the primary thing to look at
+   (see MarketContext) -- collapsed by default, not hidden. */
+.panel__header--clickable {
+  cursor: pointer;
+  list-style: none;
+}
+
+.panel__header--clickable::-webkit-details-marker {
+  display: none;
+}
+
+.panel__header--clickable h2::before {
+  content: "▸ ";
+  color: var(--text-dim);
+}
+
+details[open] > .panel__header--clickable h2::before {
+  content: "▾ ";
 }
 
 .legend-chip-row {

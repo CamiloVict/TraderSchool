@@ -1,5 +1,0 @@
-[
-  { "label": "PAXG/USDT (oro)", "file": "backtest_paxg.json", "context": "context_paxg.json" },
-  { "label": "PAXG — Setup Engine", "file": "setup_engine_backtest_paxg.json", "context": "context_paxg.json" },
-  { "label": "BTC/USDT", "file": "backtest.json", "context": "context.json" }
-]

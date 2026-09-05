@@ -125,14 +125,18 @@ export default function MarketContext({ context }) {
   const levels = liquidity?.levels ?? [];
   const lastEvent = liquidity?.events?.[liquidity.events.length - 1];
 
+  // A collapsible <details>, not a plain <section>: this is background
+  // reading on *why* the engine reads the market the way it does, not
+  // the primary thing to look at (that's the price chart + open
+  // position above it) -- secondary, not hidden.
   return (
-    <section className="panel">
-      <div className="panel__header">
+    <details className="panel">
+      <summary className="panel__header panel__header--clickable">
         <h2>Contexto de mercado</h2>
         <span className="text-dim panel__note">
           {asset} · {formatDateTime(timestamp)} · motor v{version}
         </span>
-      </div>
+      </summary>
 
       {/* The verdict comes first: whether to trade at all, and why not. */}
       <div className={`context-verdict ${noTrade ? "context-verdict--blocked" : ""}`}>
@@ -302,6 +306,6 @@ export default function MarketContext({ context }) {
         UTC fijo, sin ajuste por horario de verano. La evidencia y los motivos vienen en inglés
         tal como los emite el motor, que es también el contrato que consume la capa LLM.
       </p>
-    </section>
+    </details>
   );
 }
