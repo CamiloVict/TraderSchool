@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import ClosedTradesPanel from "./ClosedTradesPanel";
 import KpiCard from "./KpiCard";
 import LiveTradesPanel from "./LiveTradesPanel";
 import MarketContext from "./MarketContext";
@@ -84,6 +85,8 @@ export default function AssetPanel({ candlesUrl, tradeJournalUrl, contextUrl }) 
       )}
 
       <PositionChart candles={candles} trades={trades ?? []} position={position} />
+
+      <ClosedTradesPanel trades={trades} />
 
       <LiveTradesPanel trades={trades} journalUrl={tradeJournalUrl} />
 

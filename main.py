@@ -100,6 +100,7 @@ from config import (
     USE_SETUP_ENGINE,
     USE_TESTNET,
 )
+from balance_snapshot import record_balance
 from daily_loss_state import load_or_init_starting_capital
 from data_fetcher import fetch_ohlcv, get_exchange
 from heartbeat import record_heartbeat
@@ -206,6 +207,13 @@ def run_trading_cycle(exchange=None) -> dict:
         record_trades(exchange, SYMBOL)
     except Exception:
         logger.warning("Failed to update trade_journal.py's local trade history", exc_info=True)
+    # Same best-effort posture: a snapshot failure must never look like
+    # the trading cycle itself failed. Account-level (not keyed by
+    # SYMBOL) -- see balance_snapshot.py's own docstring for why.
+    try:
+        record_balance(exchange)
+    except Exception:
+        logger.warning("Failed to record balance snapshot", exc_info=True)
     # Reaching this line means the cycle above completed without
     # raising -- exactly what "the bot is alive" means for the dead
     # man's switch. Same best-effort posture: a heartbeat hiccup is

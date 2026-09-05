@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import AccountSummary from "./components/AccountSummary";
 import AssetPanel from "./components/AssetPanel";
 
 import "./App.css";
@@ -36,6 +37,8 @@ export default function App() {
       <header className="app-header">
         <h1>Trading Bot Dashboard</h1>
       </header>
+
+      <AccountSummary />
 
       <div className="tabs" role="tablist">
         {TABS.map((tab) => (

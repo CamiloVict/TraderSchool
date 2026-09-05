@@ -9,7 +9,10 @@ data/*.csv
 data/*.json
 logs/
 
-# Real account activity (trade_journal.py) copied in locally to view in
-# the dashboard -- never commit real trading data, unlike the
-# demo/backtest JSON files that live alongside it in this directory.
+# Real account activity (trade_journal.py, balance_snapshot.py) copied
+# in locally to view in the dashboard -- never commit real trading/
+# balance data, unlike the demo/backtest JSON files that live alongside
+# them in this directory.
 dashboard/public/data/trade_journal.json
+dashboard/public/data/trade_journal_btc.json
+dashboard/public/data/balance_history.json
