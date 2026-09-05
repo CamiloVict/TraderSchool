@@ -119,26 +119,17 @@ export default function AccountSummary() {
             {openPositions.length ? openPositions.map((p) => p.label).join(", ") : "ninguna"}
           </div>
         </div>
-      </div>
-
-      <h3 className="context-subtitle">Balances ({Object.keys(latest.balances ?? {}).length})</h3>
-      <div className="table-scroll">
-        <table className="trades-table">
-          <thead>
-            <tr>
-              <th>Moneda</th>
-              <th>Cantidad</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(latest.balances ?? {}).map(([currency, amount]) => (
-              <tr key={currency}>
-                <td>{currency}</td>
-                <td>{amount}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {/* Just the two assets actually traded -- USDT and any other
+            testnet faucet currency sitting in the account is noise
+            here, not something anyone needs to "manage." */}
+        <div className="kpi-card">
+          <div className="kpi-card__label">PAXG</div>
+          <div className="kpi-card__value">{latest.balances?.PAXG ?? 0}</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-card__label">BTC</div>
+          <div className="kpi-card__value">{latest.balances?.BTC ?? 0}</div>
+        </div>
       </div>
 
       <h3 className="context-subtitle">Valor total estimado (USD)</h3>
