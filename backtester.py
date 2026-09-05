@@ -29,6 +29,13 @@ Assumptions (deliberate simplifications, worth knowing about):
     (last confirmed swing low, from context_engine.structure) — the
     same building block the Setup Engine's own stop already uses. Off
     by default for the same reason the pattern filter is.
+  - `use_take_profit=True` (CLI `--take-profit`) adds a flat target at
+    risk_manager.take_profit_price() (TAKE_PROFIT_PCT), checked against
+    the candle's *high*. Off by default, and meant to stay an
+    experiment rather than a default: this is a trend-following
+    strategy, and its edge usually comes from letting a winning trade
+    run to its own signal exit rather than capping it at a fixed
+    target.
 """
 import json
 from datetime import datetime, timezone
@@ -38,7 +45,7 @@ import pandas as pd
 
 from config import RISK_PER_TRADE_PCT, STOP_LOSS_PCT, TAKE_PROFIT_PCT
 from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
-from risk_manager import position_size, stop_loss_price, structural_stop_price
+from risk_manager import position_size, stop_loss_price, structural_stop_price, take_profit_price
 from strategy import FAST_PERIOD, SLOW_PERIOD, add_signals
 
 TAKER_FEE_PCT = 0.1  # Binance default spot taker fee, %
@@ -51,6 +58,7 @@ def _simulate(
     slow: int = None,
     use_pattern_filter: bool = False,
     use_structural_stop: bool = False,
+    use_take_profit: bool = False,
 ):
     """Core simulation loop, shared by run_backtest() and export_report().
 
@@ -59,6 +67,15 @@ def _simulate(
     head-and-shoulders, descending/symmetric triangle) blocks new
     EMA-crossover entries for PATTERN_VETO_LOOKBACK candles. It only
     gates entries; exits (signal or stop-loss) are unaffected.
+
+    `use_take_profit`: opt-in flat target at risk_manager.
+    take_profit_price() (TAKE_PROFIT_PCT), checked against the
+    candle's *high*. This is deliberately the cheap experiment to run
+    first, before ever building a structural/liquidity target: a
+    trend-following strategy's edge usually comes from letting a big
+    winner run to its natural signal exit, so a fixed cap easily costs
+    more than it protects. Test with this flag before assuming a
+    fancier target is worth building.
 
     `use_structural_stop`: see this module's own docstring. When
     computing it, only `data.loc[:timestamp]` (history up to and
@@ -96,6 +113,7 @@ def _simulate(
     entry_price = 0.0
     entry_time = None
     stop_price = None
+    target_price = None
     size = 0.0  # base-asset units held while in position
     trades = []
     equity_curve = []
@@ -104,6 +122,7 @@ def _simulate(
     for timestamp, row in data.iterrows():
         price = row["close"]
         low = row["low"]
+        high = row["high"]
         signal = row["signal"]
 
         if position == 1 and stop_price is not None and low <= stop_price:
@@ -128,6 +147,33 @@ def _simulate(
             )
             position = 0
             stop_price = None
+            target_price = None
+            size = 0.0
+        elif position == 1 and target_price is not None and high >= target_price:
+            # Same intra-candle-first priority as the stop-loss check
+            # above (checked before this candle's own signal), and
+            # ahead of the signal exit below: a resting limit order
+            # would have filled once the high touched it, whatever the
+            # close or the EMA end up doing this candle.
+            exit_price = target_price
+            proceeds = size * exit_price
+            fee = proceeds * TAKER_FEE_PCT / 100
+            capital = capital - (size * entry_price) + proceeds - fee
+            total_fees_paid += fee
+            trades.append(
+                {
+                    "entry_time": entry_time,
+                    "entry_price": float(entry_price),
+                    "exit_time": timestamp,
+                    "exit_price": float(exit_price),
+                    "return_pct": float((exit_price / entry_price - 1) * 100),
+                    "exit_reason": "take_profit",
+                    "stop_loss_price": float(stop_price) if stop_price is not None else None,
+                }
+            )
+            position = 0
+            stop_price = None
+            target_price = None
             size = 0.0
         elif position == 0 and signal == 1 and not entry_blocked.loc[timestamp]:
             if use_structural_stop:
@@ -148,6 +194,7 @@ def _simulate(
                 entry_price = price
                 entry_time = timestamp
                 stop_price = candidate_stop
+                target_price = take_profit_price(price) if use_take_profit else None
                 size = candidate_size
                 cost = size * entry_price
                 fee = cost * TAKER_FEE_PCT / 100
@@ -171,6 +218,7 @@ def _simulate(
             )
             position = 0
             stop_price = None
+            target_price = None
             size = 0.0
 
         if position == 1:
@@ -254,13 +302,16 @@ def run_backtest(
     slow: int = None,
     use_pattern_filter: bool = False,
     use_structural_stop: bool = False,
+    use_take_profit: bool = False,
 ) -> dict:
     """Simulate the EMA-crossover strategy over `df` and return metrics.
 
     `df` must have a 'close' column indexed by time (as returned by
     data_fetcher.fetch_ohlcv / fetch_ohlcv_history).
     """
-    metrics, _, _ = _simulate(df, initial_capital, fast, slow, use_pattern_filter, use_structural_stop)
+    metrics, _, _ = _simulate(
+        df, initial_capital, fast, slow, use_pattern_filter, use_structural_stop, use_take_profit
+    )
     return metrics
 
 
@@ -275,12 +326,15 @@ def export_report(
     is_demo: bool = False,
     use_pattern_filter: bool = False,
     use_structural_stop: bool = False,
+    use_take_profit: bool = False,
 ) -> dict:
     """Run the backtest and write a JSON report the React dashboard reads:
     metrics, per-candle OHLC/EMA/signal/equity, and the trade list.
     Returns the same dict that's written to disk.
     """
-    metrics, data, trades = _simulate(df, initial_capital, fast, slow, use_pattern_filter, use_structural_stop)
+    metrics, data, trades = _simulate(
+        df, initial_capital, fast, slow, use_pattern_filter, use_structural_stop, use_take_profit
+    )
 
     candles = [
         {
@@ -315,7 +369,7 @@ def export_report(
             "taker_fee_pct": TAKER_FEE_PCT,
             "long_only": True,
             "single_position": True,
-            "take_profit_simulated": False,
+            "take_profit_simulated": use_take_profit,
             "pattern_filter_enabled": use_pattern_filter,
             "pattern_veto_lookback_candles": PATTERN_VETO_LOOKBACK if use_pattern_filter else None,
             "stop_priced_off": "structural (last swing low, ATR-buffered)" if use_structural_stop else "flat stop_loss_pct",
@@ -385,6 +439,17 @@ if __name__ == "__main__":
             "instead of the flat STOP_LOSS_PCT. Off by default."
         ),
     )
+    parser.add_argument(
+        "--take-profit",
+        action="store_true",
+        help=(
+            "Opt-in flat take-profit at risk_manager.take_profit_price() "
+            "(TAKE_PROFIT_PCT), checked against the candle's high. Off by "
+            "default -- a trend-following strategy's edge usually comes from "
+            "letting a winner run to its own signal exit, so this is meant as "
+            "a quick experiment, not an assumed improvement."
+        ),
+    )
     args = parser.parse_args()
 
     exchange = get_public_data_exchange() if args.source == "real" else get_exchange()
@@ -403,11 +468,17 @@ if __name__ == "__main__":
             timeframe=TIMEFRAME,
             use_pattern_filter=args.pattern_filter,
             use_structural_stop=args.structural_stop,
+            use_take_profit=args.take_profit,
         )
         metrics = report["metrics"]
         print(f"Report written to {args.export}")
     else:
-        metrics = run_backtest(history, use_pattern_filter=args.pattern_filter, use_structural_stop=args.structural_stop)
+        metrics = run_backtest(
+            history,
+            use_pattern_filter=args.pattern_filter,
+            use_structural_stop=args.structural_stop,
+            use_take_profit=args.take_profit,
+        )
 
     for key, value in metrics.items():
         print(f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}")

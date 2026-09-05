@@ -14,22 +14,33 @@ import pandas as pd
 import backtester
 from backtester import _simulate
 from config import RISK_PER_TRADE_PCT, STOP_LOSS_PCT
-from risk_manager import stop_loss_price, structural_stop_price
+from risk_manager import stop_loss_price, structural_stop_price, take_profit_price
 from strategy import add_signals, SLOW_PERIOD
 
 
-def make_df(closes: list, low_overrides: dict = None) -> pd.DataFrame:
+def make_df(closes: list, low_overrides: dict = None, high_overrides: dict = None) -> pd.DataFrame:
     """Hourly OHLCV DataFrame from a list of close prices. `close` is
     used for open/high/low too unless overridden per-index in
-    `low_overrides` — lets a test punch a deep intra-candle wick
-    without moving the EMA (which is computed off `close`)."""
+    `low_overrides`/`high_overrides` — lets a test punch a deep
+    intra-candle wick (down or up) without moving the EMA (which is
+    computed off `close`)."""
     low_overrides = low_overrides or {}
+    high_overrides = high_overrides or {}
     start = pd.Timestamp("2024-01-01", tz="UTC")
     rows = []
     index = []
     for i, close in enumerate(closes):
         low = low_overrides.get(i, close)
-        rows.append({"open": close, "high": max(close, low), "low": low, "close": close, "volume": 1.0})
+        high = high_overrides.get(i, close)
+        rows.append(
+            {
+                "open": close,
+                "high": max(close, low, high),
+                "low": min(close, low, high),
+                "close": close,
+                "volume": 1.0,
+            }
+        )
         index.append(start + pd.Timedelta(hours=i))
     return pd.DataFrame(rows, index=pd.DatetimeIndex(index, name="timestamp"))
 
@@ -141,6 +152,54 @@ class PositionSizingTests(unittest.TestCase):
         loss_pct_of_capital = (1000.0 - metrics["final_capital"]) / 1000.0 * 100
         self.assertLess(loss_pct_of_capital, STOP_LOSS_PCT)
         self.assertAlmostEqual(loss_pct_of_capital, RISK_PER_TRADE_PCT, delta=0.5)
+
+
+class TakeProfitWiringTests(unittest.TestCase):
+    def _gentle_rise_then_plateau_then_fall(self):
+        """A rise gentle enough (1.5% total) to trigger the EMA
+        crossover entry without ever naturally reaching the 4%
+        take-profit target on its own -- unlike the steep 30% rise
+        used elsewhere in this file, which would blow through the
+        target itself and confound what's actually being tested here.
+        Plateaus (signal stays bullish, no exit) before eventually
+        falling far enough to trip the stop-loss as a fallback exit."""
+        warmup = [100.0] * (SLOW_PERIOD + 5)
+        rise = [100.0 + i * 0.05 for i in range(1, 31)]
+        closes = warmup + rise
+        spike_index = len(closes)
+        plateau_val = closes[-1]
+        closes.append(plateau_val)
+        closes += [plateau_val] * 10
+        fall = [plateau_val - i for i in range(1, 31)]
+        closes += fall
+        return closes, spike_index
+
+    def test_take_profit_closes_trade_when_the_high_touches_the_target(self):
+        closes, spike_index = self._gentle_rise_then_plateau_then_fall()
+        entry_price = closes[SLOW_PERIOD + 5]  # first rise candle -> where entry fires
+        target = take_profit_price(entry_price)
+        # A high wick on the plateau, well above the take-profit target,
+        # while the close itself stays flat (the EMA crossover alone
+        # would not have exited here).
+        high_overrides = {spike_index: target * 1.1}
+        df = make_df(closes, high_overrides=high_overrides)
+
+        metrics, _, trades = _simulate(df, initial_capital=1000.0, use_take_profit=True)
+
+        self.assertGreaterEqual(len(trades), 1)
+        self.assertEqual(trades[0]["exit_reason"], "take_profit")
+        self.assertAlmostEqual(trades[0]["exit_price"], take_profit_price(trades[0]["entry_price"]), places=6)
+
+    def test_flag_off_never_triggers_a_take_profit_exit_even_if_the_high_touches_it(self):
+        closes, spike_index = self._gentle_rise_then_plateau_then_fall()
+        entry_price = closes[SLOW_PERIOD + 5]
+        target = take_profit_price(entry_price)
+        high_overrides = {spike_index: target * 1.1}
+        df = make_df(closes, high_overrides=high_overrides)
+
+        metrics, _, trades = _simulate(df, initial_capital=1000.0, use_take_profit=False)
+
+        self.assertTrue(all(t["exit_reason"] != "take_profit" for t in trades))
 
 
 class PatternFilterWiringTests(unittest.TestCase):

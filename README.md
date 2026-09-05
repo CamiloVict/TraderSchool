@@ -104,6 +104,24 @@ proceso se cortó justo después de comprar), lo reconstruye a partir del
 último fill de compra en vez de dejar la posición desprotegida hasta el
 próximo cruce.
 
+No coloca take-profit — ni en real ni en el backtest por defecto. Para
+*probar* (solo en `backtester.py`, no en `--trade`) si un take-profit
+fijo ayudaría:
+
+```bash
+python backtester.py --source real --days 30 --take-profit
+```
+
+y compará contra la misma corrida sin la bandera. Es un experimento
+deliberadamente barato: reusa `TAKE_PROFIT_PCT`/`risk_manager.
+take_profit_price()`, que ya existían en el código pero nunca se usaban
+en ningún lado. Antes de construir un target estructural (basado en
+liquidez/swings, como el stop), vale la pena confirmar si siquiera la
+versión más simple ayuda — la hipótesis de partida es que **no**,
+porque esta es una estrategia de tendencia y su ventaja suele venir de
+dejar correr a la ganadora hasta que la propia EMA le diga que se
+acabó, no de ponerle un techo fijo.
+
 **Nunca coloca órdenes si `BINANCE_TESTNET` no es `true`** — `executor.py`
 lo verifica antes de cada orden y lanza `LiveTradingDisabledError` si no.
 
@@ -645,6 +663,15 @@ Sigue sin haber backend: todo sale de JSON estáticos en
   cierre en ganancia. No ajusta el riesgo por operación automáticamente
   — eso necesitaría evidencia estadística de que ayuda, no solo una
   mala racha
+- [x] `backtester.py --take-profit`: experimento (apagado por defecto,
+  no conectado a `main.py --trade`) de un take-profit fijo en
+  `risk_manager.take_profit_price()` (`TAKE_PROFIT_PCT`), la versión
+  más barata de probar antes de construir un target estructural. La
+  hipótesis a validar contra datos reales: en una estrategia de
+  tendencia como EMA 20/50, un techo fijo probablemente **resta**
+  retorno en vez de sumarlo, porque el edge de la estrategia depende
+  de dejar correr a las operaciones ganadoras hasta su propia señal de
+  salida
 - [x] `main.py --trade`: loggea a consola y a `logs/trading.log`
   (rotado) en vez de `print()`, y envuelve el ciclo completo en un
   `try/except` que deja el traceback en el log antes de salir con
