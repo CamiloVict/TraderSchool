@@ -80,6 +80,38 @@ backtesters de este repo — EMA, scalping BTC y Setup Engine):
   contestado de entrada la pregunta de si un take-profit del 4% tenía
   siquiera sentido, sin tener que correr el experimento aparte.
 
+**`--walk-forward N`** (también en `scalping_backtester.py`): en vez de
+una sola corrida sobre toda la ventana de `--days`, la parte en `N`
+segmentos contiguos y corre exactamente la misma configuración
+(sin cambiar ningún parámetro) en cada uno por separado, imprimiendo
+una comparación lado a lado en vez de un solo reporte (ignora
+`--export`):
+
+```bash
+python backtester.py --source real --days 90 --walk-forward 3
+```
+
+No es walk-forward *optimization* en el sentido clásico — este repo no
+ajusta parámetros automáticamente a partir de los datos (`FAST_PERIOD`,
+`STOP_LOSS_PCT`, etc. los elige una persona a mano vía `.env`), así que
+no hay nada que "reoptimizar" por segmento. Lo que sí contesta, y es un
+riesgo real que ya se dio en esta misma sesión: cada ajuste de
+parámetro (umbrales de RSI, multiplicador de ATR, `TAKE_PROFIT_PCT`...)
+se probó corriendo una y otra vez contra la *misma* ventana real de 30
+días — la forma clásica de terminar ajustando contra el ruido de esa
+ventana en particular en vez de encontrar una ventaja real. Si un
+resultado solo aparece en uno de los segmentos, es más probable que
+sea ruido de ese segmento que una ventaja real de la estrategia.
+
+Una limitación a tener en cuenta: si una operación queda abierta justo
+en el borde entre dos segmentos, ese segmento la marca a mercado en su
+`final_capital`/`total_return_pct` (igual que ya hace un backtest
+normal al final de los datos), pero sus métricas de operaciones
+cerradas (`win_rate_pct`, `profit_factor`) todavía no la cuentan — así
+que un segmento puede mostrar retorno positivo con 0% de win rate si
+sus únicas operaciones cerradas perdieron pero terminó con una
+ganancia de papel sin cerrar.
+
 **Usá `--source real`** (Binance real, datos públicos, sin API key, sin
 riesgo — no coloca órdenes) en vez del default `--source testnet`. El
 testnet solo guarda una ventana corta de velas (en la práctica, unas
@@ -657,6 +689,17 @@ Sigue sin haber backend: todo sale de JSON estáticos en
   profit factor (USD, no %), y MAE/MFE promedio por operación —
   compartido por los tres backtesters (EMA, scalping BTC, Setup
   Engine), no reimplementado en cada uno
+- [x] `backtester.split_into_segments()` + `--walk-forward N`
+  (`backtester.py` y `scalping_backtester.py`): corre la misma
+  configuración sin cambios sobre N ventanas históricas separadas, en
+  vez de una sola vez sobre toda la historia — chequeo de
+  out-of-sample, no optimización walk-forward clásica (acá no hay
+  parámetros que se ajusten solos). No está conectado a
+  `setup_engine_backtester.py`: su loop ya es lento por diseño (un
+  contexto multi-timeframe completo por vela) y trocearlo en segmentos
+  necesitaría además decidir cómo darle a cada segmento su propia
+  ventana de lookback previa, no solo repetir el `run_backtest` de
+  turno
 - [x] `risk_manager.py`: tamaño de posición por % de riesgo (con stop
   fijo o un `stop_price` estructural explícito), precios de
   stop-loss/take-profit, límite de pérdida diaria (`DailyLossTracker`)

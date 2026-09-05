@@ -36,6 +36,13 @@ Assumptions (deliberate simplifications, worth knowing about):
     strategy, and its edge usually comes from letting a winning trade
     run to its own signal exit rather than capping it at a fixed
     target.
+  - CLI `--walk-forward N`: runs the same, unchanged config across N
+    contiguous historical segments instead of one pass over the whole
+    window, and prints a per-segment comparison (see
+    split_into_segments()). Answers whether a result holds up outside
+    the exact window it was read on -- this repo doesn't auto-fit
+    parameters from data, so it isn't walk-forward *optimization*, just
+    an out-of-sample sanity check on whatever config was chosen by hand.
 """
 import json
 from datetime import datetime, timezone
@@ -413,6 +420,59 @@ def compute_metrics(
     }
 
 
+def split_into_segments(df: pd.DataFrame, n_segments: int, min_candles: int) -> list:
+    """Split `df` into `n_segments` contiguous, non-overlapping chunks
+    by row count (the last segment absorbs the remainder, so it can be
+    up to `n_segments - 1` candles bigger than the others).
+
+    Backs the CLI's `--walk-forward` out-of-sample check: this repo's
+    strategies don't auto-fit parameters from data (FAST_PERIOD,
+    STOP_LOSS_PCT, etc. are all config, chosen by a human), so a
+    classic walk-forward *optimization* doesn't apply here. What this
+    answers instead is the more basic and, in this session, more
+    concrete risk: every parameter change so far (RSI thresholds, ATR
+    buffers, TAKE_PROFIT_PCT...) got tuned by rerunning against the
+    *same* 30-day real window each time -- which is exactly how you'd
+    accidentally fit noise in that one window rather than find a real
+    edge. Running the same, unchanged config across several separate
+    historical segments checks whether a result holds up outside the
+    window it was read on, without needing an optimizer to exist.
+
+    Raises ValueError if a resulting segment would have fewer than
+    `min_candles` rows -- too little history split too many ways
+    produces segments too short to trust (e.g. shorter than the
+    strategy's own EMA warmup).
+
+    One artifact worth knowing about: a segment boundary can land in
+    the middle of what would otherwise be one continuous trade. If a
+    position is still open on the segment's last candle, that
+    segment's `final_capital`/`total_return_pct` mark it to market same
+    as a normal single-window backtest would at the data's end -- but
+    none of that trade's closed-trade stats (win_rate_pct,
+    profit_factor, ...) reflect it yet, since it never actually closed
+    within the segment. A segment can therefore show a positive
+    total_return_pct with a 0% win rate if its only closed trades lost
+    but it happened to be sitting on an open paper gain when the
+    segment ended.
+    """
+    if n_segments < 2:
+        raise ValueError("n_segments must be at least 2 -- a single segment isn't a comparison")
+    total = len(df)
+    segment_size = total // n_segments
+    if segment_size < min_candles:
+        raise ValueError(
+            f"{total} candles split into {n_segments} segments gives ~{segment_size} candles each, "
+            f"fewer than the {min_candles} needed for a meaningful backtest here -- fetch more "
+            f"history (--days) or ask for fewer segments."
+        )
+    segments = []
+    for i in range(n_segments):
+        start = i * segment_size
+        end = total if i == n_segments - 1 else (i + 1) * segment_size
+        segments.append(df.iloc[start:end])
+    return segments
+
+
 def run_backtest(
     df: pd.DataFrame,
     initial_capital: float = 1000.0,
@@ -568,6 +628,20 @@ if __name__ == "__main__":
             "a quick experiment, not an assumed improvement."
         ),
     )
+    parser.add_argument(
+        "--walk-forward",
+        type=int,
+        metavar="N",
+        default=None,
+        help=(
+            "Instead of one backtest over the whole --days window, split it "
+            "into N contiguous, non-overlapping segments and run the same "
+            "config (unchanged) on each independently. Checks whether a "
+            "result holds up out-of-sample instead of only ever being read "
+            "against the one window it was tuned on. Prints a per-segment "
+            "comparison instead of a single report; ignores --export."
+        ),
+    )
     args = parser.parse_args()
 
     exchange = get_public_data_exchange() if args.source == "real" else get_exchange()
@@ -578,25 +652,63 @@ if __name__ == "__main__":
     history = fetch_ohlcv_history(exchange, symbol=SYMBOL, timeframe=TIMEFRAME, since_ms=since_ms)
     print(f"Got {len(history)} candles: {history.index.min()} -> {history.index.max()}\n")
 
-    if args.export:
-        report = export_report(
-            history,
-            args.export,
-            symbol=SYMBOL,
-            timeframe=TIMEFRAME,
-            use_pattern_filter=args.pattern_filter,
-            use_structural_stop=args.structural_stop,
-            use_take_profit=args.take_profit,
+    if args.walk_forward:
+        segments = split_into_segments(history, args.walk_forward, min_candles=SLOW_PERIOD * 2)
+        print(f"Walk-forward: {args.walk_forward} segments, identical config run on each --\n")
+        segment_returns = []
+        comparison_keys = (
+            "total_return_pct",
+            "buy_hold_return_pct",
+            "num_trades",
+            "win_rate_pct",
+            "max_drawdown_pct",
+            "sharpe_ratio",
+            "profit_factor",
         )
-        metrics = report["metrics"]
-        print(f"Report written to {args.export}")
-    else:
-        metrics = run_backtest(
-            history,
-            use_pattern_filter=args.pattern_filter,
-            use_structural_stop=args.structural_stop,
-            use_take_profit=args.take_profit,
-        )
+        for i, segment in enumerate(segments, start=1):
+            segment_metrics = run_backtest(
+                segment,
+                use_pattern_filter=args.pattern_filter,
+                use_structural_stop=args.structural_stop,
+                use_take_profit=args.take_profit,
+            )
+            segment_returns.append(segment_metrics["total_return_pct"])
+            print(
+                f"--- Segment {i}/{args.walk_forward}: {segment.index.min()} -> "
+                f"{segment.index.max()} ({len(segment)} candles) ---"
+            )
+            for key in comparison_keys:
+                value = segment_metrics[key]
+                print(f"  {key}: {value:.2f}" if isinstance(value, float) else f"  {key}: {value}")
+            print()
 
-    for key, value in metrics.items():
-        print(f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}")
+        profitable = sum(1 for r in segment_returns if r > 0)
+        print(
+            f"Summary: {profitable}/{len(segment_returns)} segments profitable, "
+            f"total_return_pct range [{min(segment_returns):.2f}, {max(segment_returns):.2f}]. "
+            "A result that only shows up in one segment is more likely that "
+            "segment's noise than a real edge."
+        )
+    else:
+        if args.export:
+            report = export_report(
+                history,
+                args.export,
+                symbol=SYMBOL,
+                timeframe=TIMEFRAME,
+                use_pattern_filter=args.pattern_filter,
+                use_structural_stop=args.structural_stop,
+                use_take_profit=args.take_profit,
+            )
+            metrics = report["metrics"]
+            print(f"Report written to {args.export}")
+        else:
+            metrics = run_backtest(
+                history,
+                use_pattern_filter=args.pattern_filter,
+                use_structural_stop=args.structural_stop,
+                use_take_profit=args.take_profit,
+            )
+
+        for key, value in metrics.items():
+            print(f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}")

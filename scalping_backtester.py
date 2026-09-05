@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from backtester import TAKER_FEE_PCT, compute_metrics
+from backtester import TAKER_FEE_PCT, compute_metrics, split_into_segments
 from risk_manager import position_size, stop_loss_price
 from scalping_strategy import (
     DISCOUNT_MAX,
@@ -284,6 +284,18 @@ if __name__ == "__main__":
     parser.add_argument("--symbol", default="BTC/USDT", help="Symbol to backtest (default BTC/USDT)")
     parser.add_argument("--timeframe", default="5m", help="Candle timeframe (default 5m)")
     parser.add_argument("--days", type=int, default=30, help="Days of history to fetch (default 30)")
+    parser.add_argument(
+        "--walk-forward",
+        type=int,
+        metavar="N",
+        default=None,
+        help=(
+            "Same idea as backtester.py's --walk-forward: split the fetched "
+            "history into N contiguous segments and run the same config on "
+            "each independently, instead of one pass over the whole window. "
+            "Prints a per-segment comparison; ignores --export."
+        ),
+    )
     args = parser.parse_args()
 
     exchange = get_public_data_exchange()
@@ -294,12 +306,43 @@ if __name__ == "__main__":
     history = fetch_ohlcv_history(exchange, symbol=args.symbol, timeframe=args.timeframe, since_ms=since_ms)
     print(f"Got {len(history)} candles: {history.index.min()} -> {history.index.max()}\n")
 
-    if args.export:
-        report = export_report(history, args.export, symbol=args.symbol, timeframe=args.timeframe)
-        metrics = report["metrics"]
-        print(f"Report written to {args.export}")
-    else:
-        metrics = run_backtest(history)
+    if args.walk_forward:
+        segments = split_into_segments(history, args.walk_forward, min_candles=max(LOOKBACK, RSI_PERIOD) * 2)
+        print(f"Walk-forward: {args.walk_forward} segments, identical config run on each --\n")
+        segment_returns = []
+        comparison_keys = (
+            "total_return_pct",
+            "buy_hold_return_pct",
+            "num_trades",
+            "win_rate_pct",
+            "max_drawdown_pct",
+            "sharpe_ratio",
+            "profit_factor",
+        )
+        for i, segment in enumerate(segments, start=1):
+            segment_metrics = run_backtest(segment)
+            segment_returns.append(segment_metrics["total_return_pct"])
+            print(
+                f"--- Segment {i}/{args.walk_forward}: {segment.index.min()} -> "
+                f"{segment.index.max()} ({len(segment)} candles) ---"
+            )
+            for key in comparison_keys:
+                value = segment_metrics[key]
+                print(f"  {key}: {value:.2f}" if isinstance(value, float) else f"  {key}: {value}")
+            print()
 
-    for key, value in metrics.items():
-        print(f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}")
+        profitable = sum(1 for r in segment_returns if r > 0)
+        print(
+            f"Summary: {profitable}/{len(segment_returns)} segments profitable, "
+            f"total_return_pct range [{min(segment_returns):.2f}, {max(segment_returns):.2f}]."
+        )
+    else:
+        if args.export:
+            report = export_report(history, args.export, symbol=args.symbol, timeframe=args.timeframe)
+            metrics = report["metrics"]
+            print(f"Report written to {args.export}")
+        else:
+            metrics = run_backtest(history)
+
+        for key, value in metrics.items():
+            print(f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}")

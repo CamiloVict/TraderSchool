@@ -202,6 +202,40 @@ class TakeProfitWiringTests(unittest.TestCase):
         self.assertTrue(all(t["exit_reason"] != "take_profit" for t in trades))
 
 
+class SplitIntoSegmentsTests(unittest.TestCase):
+    def test_splits_evenly_into_contiguous_non_overlapping_chunks(self):
+        df = make_df([100.0 + i for i in range(90)])
+
+        segments = backtester.split_into_segments(df, 3, min_candles=10)
+
+        self.assertEqual([len(s) for s in segments], [30, 30, 30])
+        self.assertEqual(segments[0].index[0], df.index[0])
+        self.assertEqual(segments[-1].index[-1], df.index[-1])
+        # contiguous: each segment picks up exactly where the last left off
+        self.assertEqual(segments[0].index[-1] + pd.Timedelta(hours=1), segments[1].index[0])
+        self.assertEqual(segments[1].index[-1] + pd.Timedelta(hours=1), segments[2].index[0])
+
+    def test_last_segment_absorbs_the_remainder(self):
+        df = make_df([100.0 + i for i in range(95)])
+
+        segments = backtester.split_into_segments(df, 3, min_candles=10)
+
+        self.assertEqual([len(s) for s in segments], [31, 31, 33])
+        self.assertEqual(sum(len(s) for s in segments), 95)
+
+    def test_rejects_a_single_segment(self):
+        df = make_df([100.0] * 50)
+
+        with self.assertRaises(ValueError):
+            backtester.split_into_segments(df, 1, min_candles=10)
+
+    def test_rejects_when_a_segment_would_be_shorter_than_min_candles(self):
+        df = make_df([100.0] * 50)
+
+        with self.assertRaises(ValueError):
+            backtester.split_into_segments(df, 10, min_candles=10)
+
+
 class TradePnlUsdTests(unittest.TestCase):
     """Isolated tests for compute_metrics's _trade_pnl_usd helper --
     reads a trade's net $ P&L (fees included) straight off the
