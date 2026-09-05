@@ -147,12 +147,20 @@ class DailyLossTracker:
         self._roll_day_if_needed()
         self._realized_pnl += pnl
 
-    def trading_allowed(self) -> bool:
+    def current_loss_pct(self) -> float:
+        """Today's realized loss so far, as a positive percentage of
+        the day's starting capital (0 or negative = no net loss yet).
+        Exposed separately from trading_allowed() so a caller can log
+        *how close* the breaker is, not just whether it tripped."""
         self._roll_day_if_needed()
         if self.starting_capital <= 0:
+            return 0.0
+        return -self._realized_pnl / self.starting_capital * 100
+
+    def trading_allowed(self) -> bool:
+        if self.starting_capital <= 0:
             return False
-        loss_pct = -self._realized_pnl / self.starting_capital * 100
-        return loss_pct < MAX_DAILY_LOSS_PCT
+        return self.current_loss_pct() < MAX_DAILY_LOSS_PCT
 
 
 @dataclass
@@ -183,12 +191,18 @@ class WeeklyLossTracker:
         self._roll_week_if_needed()
         self._realized_pnl += pnl
 
-    def trading_allowed(self) -> bool:
+    def current_loss_pct(self) -> float:
+        """Same idea as DailyLossTracker.current_loss_pct(), over the
+        current ISO week."""
         self._roll_week_if_needed()
         if self.starting_capital <= 0:
+            return 0.0
+        return -self._realized_pnl / self.starting_capital * 100
+
+    def trading_allowed(self) -> bool:
+        if self.starting_capital <= 0:
             return False
-        loss_pct = -self._realized_pnl / self.starting_capital * 100
-        return loss_pct < MAX_WEEKLY_LOSS_PCT
+        return self.current_loss_pct() < MAX_WEEKLY_LOSS_PCT
 
 
 def consecutive_losses(trades: list) -> int:

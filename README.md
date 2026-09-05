@@ -191,6 +191,38 @@ acabó, no de ponerle un techo fijo.
 **Nunca coloca órdenes si `BINANCE_TESTNET` no es `true`** — `executor.py`
 lo verifica antes de cada orden y lanza `LiveTradingDisabledError` si no.
 
+### Cada decisión queda auditada, no solo registrada
+
+El dict que cada ciclo (EMA o Setup Engine) devuelve y loguea a
+`logs/trading.log` ya no es solo `{"action": "buy", ...}` — trae un
+campo `reason` en una sola oración explicando el porqué, más los
+números concretos detrás de esa oración:
+
+```json
+{
+  "action": "buy",
+  "reason": "EMA fast crossed above slow with no position open; sized to risk 1.0% of capital against a flat_stop_loss_pct stop at 11750.2",
+  "stop_price": 11750.2,
+  "stop_source": "flat_stop_loss_pct",
+  "size": 0.0417,
+  "risk_pct": 1.0
+}
+```
+
+Una entrada bloqueada trae el número real que la bloqueó, no solo el
+nombre del límite — por ejemplo
+`"today's realized loss (99.90%) has hit MAX_DAILY_LOSS_PCT"` con
+`daily_loss_pct: 99.9` al lado, o
+`"the last 5 closed trades all lost"` con `consecutive_losses_count: 5`.
+Así una decisión se audita leyendo `logs/trading.log`, sin tener que
+volver a este código para reconstruir por qué pasó lo que pasó. Ver
+`main._ema_action_reason()`/`main._setup_engine_action_reason()`.
+
+**No aplica al bot de BTC**: `scalping_backtester.py` no está conectado
+a `main.py --trade` (ver "Decisiones tomadas hasta ahora" más abajo),
+así que no hay un ciclo en vivo cuyas decisiones auditar todavía — esto
+es específico a los dos ciclos que sí corren en `main.py`.
+
 ### Automatizarlo (cron o systemd timer)
 
 `main.py --trade` está pensado para que algo externo lo invoque una vez
@@ -758,6 +790,15 @@ Sigue sin haber backend: todo sale de JSON estáticos en
   `try/except` que deja el traceback en el log antes de salir con
   código de error — sin esto, un cron sin nadie mirando stdout en vivo
   no tiene forma de notar que una corrida falló
+- [x] `main._ema_action_reason()`/`main._setup_engine_action_reason()`:
+  cada decisión de cada ciclo (compra, venta, entrada bloqueada, hold,
+  stop reconstruido) trae un `reason` en una oración más los números
+  concretos detrás (`stop_price`, `stop_source`, `size`, `risk_pct`,
+  o el `daily_loss_pct`/`weekly_loss_pct`/`consecutive_losses_count`
+  real que bloqueó la entrada) — auditable desde `logs/trading.log`
+  sin releer este código. `DailyLossTracker`/`WeeklyLossTracker`
+  ganaron `current_loss_pct()` para esto (antes solo exponían el
+  booleano `trading_allowed()`)
 - [x] `retry.py`: reintentos con backoff exponencial ante
   `ccxt.NetworkError` transitorio (velas, balances, órdenes abiertas,
   historial de trades) — un timeout puntual ya no tira abajo el ciclo

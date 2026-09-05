@@ -335,6 +335,57 @@ class RunTradingCycleTests(unittest.TestCase):
         self.assertEqual(result["action"], "buy")
 
 
+class EmaAuditFieldsTests(unittest.TestCase):
+    """Every action the EMA cycle can take must come with a `reason`
+    that explains it, plus the concrete numbers (stop/size/risk_pct or
+    the loss-limit/streak value that tripped) an audit needs -- not
+    just the bare action string. See main._ema_action_reason()."""
+
+    def test_buy_reason_reports_the_stop_and_risk_used(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "buy")
+        self.assertIn("flat_stop_loss_pct", result["reason"])
+        self.assertEqual(result["stop_source"], "flat_stop_loss_pct")
+        self.assertAlmostEqual(result["stop_price"], risk_manager.stop_loss_price(result["price"]), places=0)
+        self.assertGreater(result["size"], 0)
+        self.assertEqual(result["risk_pct"], 1.0)
+
+    def test_daily_loss_block_reason_reports_the_actual_loss_pct(self):
+        candles = make_candles(200, start_price=10000, step=10)
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        with patch("main.load_or_init_starting_capital", return_value=1_000_000.0):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_blocked_by_daily_loss_limit")
+        self.assertIsNotNone(result["daily_loss_pct"])
+        self.assertIn(f"{result['daily_loss_pct']:.2f}%", result["reason"])
+        self.assertIsNone(result["stop_price"])
+        self.assertIsNone(result["size"])
+
+    def test_consecutive_losses_block_reason_reports_the_streak_length(self):
+        candles = make_candles(200, start_price=10000, step=10)
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+        losing_streak = make_losing_streak(MAX_CONSECUTIVE_LOSSES)
+
+        with patch("main.read_journal", return_value=losing_streak):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_blocked_by_consecutive_losses")
+        self.assertEqual(result["consecutive_losses_count"], MAX_CONSECUTIVE_LOSSES)
+        self.assertIn(str(MAX_CONSECUTIVE_LOSSES), result["reason"])
+
+    def test_hold_reason_differs_between_flat_and_in_position(self):
+        flat_candles = make_candles(200, start_price=10000, step=-10)  # downtrend -> signal 0, flat
+        result = main.run_trading_cycle(FakeExchange(flat_candles, free={"USDT": 1000.0}))
+        self.assertEqual(result["action"], "hold")
+        self.assertIn("no EMA entry signal", result["reason"])
+
+
 class NotifyWiringTests(unittest.TestCase):
     """run_trading_cycle() -- not each individual cycle function -- is
     where notify() gets called, so this covers both engines' actions
@@ -704,6 +755,62 @@ class SetupEngineTradingCycleTests(unittest.TestCase):
         stop_orders = [o for o in exchange.created_orders if o["side"] == "sell"]
         self.assertEqual(len(stop_orders), 1)
         self.assertEqual(stop_orders[0]["triggerPrice"], 9200.0)
+
+    def test_buy_reason_reports_the_invalidation_stop_and_risk_used(self):
+        from context_engine.schema import Direction, Invalidation, Setup, SetupName
+
+        setup = Setup(
+            name=SetupName.LIQUIDITY_SWEEP_RECLAIM,
+            direction=Direction.LONG,
+            reasons=["fake"],
+            invalidation=Invalidation(type="CLOSE_BELOW", level=9000.0, detail="fake"),
+        )
+        snapshot = make_snapshot(setups=[setup], invalidation_level=9000.0)
+        exchange = FakeExchange(make_candles(5, 10000, 0), free={"USDT": 1000.0})
+
+        p1, p2, p3, p4 = self._patches(snapshot)
+        with p1, p2, p3, p4:
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "buy")
+        self.assertEqual(result["stop_source"], "setup_invalidation_level")
+        self.assertEqual(result["stop_price"], 9000.0)
+        self.assertIn("setup_invalidation_level", result["reason"])
+        self.assertIn("9000.0", result["reason"])
+        self.assertEqual(result["risk_pct"], 1.0)
+
+    def test_exit_reason_distinguishes_no_trade_bias_flip_and_bearish_pattern(self):
+        from context_engine.schema import Bias
+
+        base = SYMBOL.split("/")[0]
+
+        def sell_with(snapshot):
+            stale_stop = {"id": "stop-1", "side": "sell", "amount": 1.0, "triggerPrice": 9000.0}
+            exchange = FakeExchange(make_candles(5, 10000, 0), locked={base: 1.0}, open_orders=[stale_stop])
+            p1, p2, p3, p4 = self._patches(snapshot)
+            with p1, p2, p3, p4:
+                return main.run_trading_cycle(exchange)
+
+        no_trade_result = sell_with(make_snapshot(bias_direction=Bias.NEUTRAL, no_trade=True))
+        self.assertEqual(no_trade_result["action"], "sell")
+        self.assertIn("no_trade", no_trade_result["reason"])
+
+        bias_flip_result = sell_with(make_snapshot(bias_direction=Bias.BEARISH, no_trade=False))
+        self.assertEqual(bias_flip_result["action"], "sell")
+        self.assertIn("bias", bias_flip_result["reason"])
+
+    def test_stop_loss_replaced_reason_reports_the_source_and_price(self):
+        base = SYMBOL.split("/")[0]
+        exchange = FakeExchange(make_candles(5, 10000, 0), free={base: 1.0})
+        snapshot = make_snapshot(invalidation_level=9200.0)
+
+        p1, p2, p3, p4 = self._patches(snapshot)
+        with p1, p2, p3, p4:
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "stop_loss_replaced")
+        self.assertEqual(result["stop_source"], "setup_invalidation_level")
+        self.assertIn("9200.0", result["reason"])
 
 
 class CheckConnectionTests(unittest.TestCase):

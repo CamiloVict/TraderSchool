@@ -102,6 +102,7 @@ from config import (
     BINANCE_API_KEY,
     CONTEXT_HISTORY_DAYS,
     MAX_CONSECUTIVE_LOSSES,
+    RISK_PER_TRADE_PCT,
     SYMBOL,
     TIMEFRAME,
     USE_PATTERN_FILTER,
@@ -124,11 +125,13 @@ import weekly_loss_state
 logger = logging.getLogger("trading_bot")
 
 
-def _daily_loss_limit_hit(current_equity: float) -> bool:
-    """True if today's (UTC) realized loss already meets or exceeds
-    MAX_DAILY_LOSS_PCT — new entries should be skipped for the rest of
-    the day. Does not force-close an existing position; that still
-    exits through its own normal rules (stop-loss/signal/bias/no_trade).
+def _daily_loss_limit_hit(current_equity: float) -> tuple:
+    """(hit, loss_pct): whether today's (UTC) realized loss already
+    meets or exceeds MAX_DAILY_LOSS_PCT -- new entries should be
+    skipped for the rest of the day -- and the actual loss_pct so far,
+    for logging *how close* the breaker is even when it didn't trip.
+    Does not force-close an existing position; that still exits
+    through its own normal rules (stop-loss/signal/bias/no_trade).
 
     A fresh DailyLossTracker is built every call because the class
     itself is in-memory only (see its docstring) and this function may
@@ -140,10 +143,10 @@ def _daily_loss_limit_hit(current_equity: float) -> bool:
     starting_capital = load_or_init_starting_capital(current_equity)
     tracker = DailyLossTracker(starting_capital=starting_capital)
     tracker.record_trade_pnl(current_equity - starting_capital)
-    return not tracker.trading_allowed()
+    return not tracker.trading_allowed(), tracker.current_loss_pct()
 
 
-def _weekly_loss_limit_hit(current_equity: float) -> bool:
+def _weekly_loss_limit_hit(current_equity: float) -> tuple:
     """Same idea as _daily_loss_limit_hit(), over the current ISO week
     instead of the current UTC day -- see weekly_loss_state.py and
     risk_manager.WeeklyLossTracker. Independent of the daily limit: a
@@ -154,19 +157,21 @@ def _weekly_loss_limit_hit(current_equity: float) -> bool:
     starting_capital = weekly_loss_state.load_or_init_starting_capital(current_equity)
     tracker = WeeklyLossTracker(starting_capital=starting_capital)
     tracker.record_trade_pnl(current_equity - starting_capital)
-    return not tracker.trading_allowed()
+    return not tracker.trading_allowed(), tracker.current_loss_pct()
 
 
-def _consecutive_losses_hit() -> bool:
-    """True if the most recent MAX_CONSECUTIVE_LOSSES *closed* trades
-    all lost money -- new entries should pause until a win breaks the
-    streak. Reads whatever trade_journal.py already persisted as of
-    the start of this cycle (the previous cycle's own record_trades()
-    call already synced any trade that closed since); does not itself
-    trigger a fresh exchange fetch.
+def _consecutive_losses_hit() -> tuple:
+    """(hit, count): whether the most recent MAX_CONSECUTIVE_LOSSES
+    *closed* trades all lost money -- new entries should pause until a
+    win breaks the streak -- and the actual streak length, for logging
+    even when it's below the threshold. Reads whatever trade_journal.py
+    already persisted as of the start of this cycle (the previous
+    cycle's own record_trades() call already synced any trade that
+    closed since); does not itself trigger a fresh exchange fetch.
     """
     journal = read_journal()
-    return consecutive_losses(journal) >= MAX_CONSECUTIVE_LOSSES
+    count = consecutive_losses(journal)
+    return count >= MAX_CONSECUTIVE_LOSSES, count
 
 
 def check_connection() -> None:
@@ -303,6 +308,12 @@ def _run_ema_cycle(exchange) -> dict:
     action = "hold"
     order = None
     stop_order = None
+    stop_price = None
+    stop_source = None
+    size = None
+    daily_loss_pct = None
+    weekly_loss_pct = None
+    consecutive_losses_count = None
 
     entry_blocked_by_pattern = False
     daily_loss_limit_hit = False
@@ -316,9 +327,9 @@ def _run_ema_cycle(exchange) -> dict:
             )
         quote_balance = get_quote_asset_balance(exchange, SYMBOL)
         equity = quote_balance + total_balance * price
-        daily_loss_limit_hit = _daily_loss_limit_hit(equity)
-        weekly_loss_limit_hit = _weekly_loss_limit_hit(equity)
-        consecutive_losses_hit = _consecutive_losses_hit()
+        daily_loss_limit_hit, daily_loss_pct = _daily_loss_limit_hit(equity)
+        weekly_loss_limit_hit, weekly_loss_pct = _weekly_loss_limit_hit(equity)
+        consecutive_losses_hit, consecutive_losses_count = _consecutive_losses_hit()
 
     if (
         signal == 1
@@ -328,7 +339,9 @@ def _run_ema_cycle(exchange) -> dict:
         and not weekly_loss_limit_hit
         and not consecutive_losses_hit
     ):
-        size = position_size(quote_balance, price, stop_price=stop_for(price))
+        stop_price = stop_for(price)
+        stop_source = "structural_swing_low" if USE_STRUCTURAL_STOP else "flat_stop_loss_pct"
+        size = position_size(quote_balance, price, stop_price=stop_price)
         if size > 0:
             order = place_market_order(exchange, SYMBOL, "buy", size)
             action = "buy"
@@ -337,9 +350,8 @@ def _run_ema_cycle(exchange) -> dict:
             # Re-derived off the real average fill price, not the
             # pre-trade estimate used to size the order above -- same
             # as this cycle already did for the flat-% stop.
-            stop_order = place_stop_loss_order(
-                exchange, SYMBOL, filled_amount, stop_for(entry_price)
-            )
+            stop_price = stop_for(entry_price)
+            stop_order = place_stop_loss_order(exchange, SYMBOL, filled_amount, stop_price)
     elif signal == 1 and not in_position and entry_blocked_by_pattern:
         action = "entry_blocked_by_pattern"
     elif signal == 1 and not in_position and daily_loss_limit_hit:
@@ -363,9 +375,9 @@ def _run_ema_cycle(exchange) -> dict:
         # Reconstruct the entry price from the last buy fill so the
         # position isn't left unprotected until the next EMA exit.
         entry_price = get_last_fill_price(exchange, SYMBOL, "buy") or price
-        stop_order = place_stop_loss_order(
-            exchange, SYMBOL, total_balance, stop_for(entry_price)
-        )
+        stop_price = stop_for(entry_price)
+        stop_source = "structural_swing_low" if USE_STRUCTURAL_STOP else "flat_stop_loss_pct"
+        stop_order = place_stop_loss_order(exchange, SYMBOL, total_balance, stop_price)
         action = "stop_loss_replaced"
 
     result = {
@@ -374,11 +386,65 @@ def _run_ema_cycle(exchange) -> dict:
         "signal": signal,
         "in_position_before": in_position,
         "action": action,
+        "reason": _ema_action_reason(
+            action,
+            in_position=in_position,
+            stop_price=stop_price,
+            stop_source=stop_source,
+            size=size,
+            daily_loss_pct=daily_loss_pct,
+            weekly_loss_pct=weekly_loss_pct,
+            consecutive_losses_count=consecutive_losses_count,
+        ),
         "order_id": order.get("id") if order else None,
         "stop_order_id": stop_order.get("id") if stop_order else None,
+        "stop_price": stop_price,
+        "stop_source": stop_source,
+        "size": size,
+        "risk_pct": RISK_PER_TRADE_PCT if action == "buy" else None,
+        "daily_loss_pct": daily_loss_pct,
+        "weekly_loss_pct": weekly_loss_pct,
+        "consecutive_losses_count": consecutive_losses_count,
     }
     logger.info(result)
     return result
+
+
+def _ema_action_reason(
+    action: str,
+    *,
+    in_position: bool,
+    stop_price,
+    stop_source,
+    size,
+    daily_loss_pct,
+    weekly_loss_pct,
+    consecutive_losses_count,
+) -> str:
+    """One-sentence, human-readable explanation of why the EMA cycle
+    did what it did this run -- so a trade decision can be audited
+    from logs/trading.log without re-reading this module's branches.
+    Every action string above maps to exactly one reason here."""
+    if action == "buy":
+        return (
+            f"EMA fast crossed above slow with no position open; sized to risk "
+            f"{RISK_PER_TRADE_PCT}% of capital against a {stop_source} stop at {stop_price}"
+        )
+    if action == "sell":
+        return "EMA fast crossed back below slow while in position -- signal exit"
+    if action == "entry_blocked_by_pattern":
+        return "EMA signal is bullish, but a confirmed bearish chart pattern is vetoing new entries"
+    if action == "entry_blocked_by_daily_loss_limit":
+        return f"EMA signal is bullish, but today's realized loss ({daily_loss_pct:.2f}%) has hit MAX_DAILY_LOSS_PCT"
+    if action == "entry_blocked_by_weekly_loss_limit":
+        return f"EMA signal is bullish, but this week's realized loss ({weekly_loss_pct:.2f}%) has hit MAX_WEEKLY_LOSS_PCT"
+    if action == "entry_blocked_by_consecutive_losses":
+        return f"EMA signal is bullish, but the last {consecutive_losses_count} closed trades all lost -- pausing for a win to break the streak"
+    if action == "stop_loss_replaced":
+        return f"in position with no protective stop on the exchange -- rebuilt a {stop_source} stop at {stop_price} from the last buy fill"
+    if in_position:
+        return "in position, EMA signal still bullish -- holding, waiting for the exit condition"
+    return "no EMA entry signal (fast EMA not above slow)"
 
 
 def _run_setup_engine_cycle(exchange) -> dict:
@@ -422,6 +488,7 @@ def _run_setup_engine_cycle(exchange) -> dict:
             "timestamp": None,
             "price": None,
             "action": "no_data",
+            "reason": f"no {TIMEFRAME} candles came back from build_timeframe_set for {SYMBOL}",
             "in_position_before": None,
             "order_id": None,
             "stop_order_id": None,
@@ -461,6 +528,13 @@ def _run_setup_engine_cycle(exchange) -> dict:
     action = "hold"
     order = None
     stop_order = None
+    stop_price = None
+    stop_source = None
+    size = None
+    daily_loss_pct = None
+    weekly_loss_pct = None
+    consecutive_losses_count = None
+    exit_trigger = None
 
     daily_loss_limit_hit = False
     weekly_loss_limit_hit = False
@@ -468,9 +542,9 @@ def _run_setup_engine_cycle(exchange) -> dict:
     if long_setup is not None and not in_position and not context.no_trade:
         quote_balance = get_quote_asset_balance(exchange, SYMBOL)
         equity = quote_balance + total_balance * price
-        daily_loss_limit_hit = _daily_loss_limit_hit(equity)
-        weekly_loss_limit_hit = _weekly_loss_limit_hit(equity)
-        consecutive_losses_hit = _consecutive_losses_hit()
+        daily_loss_limit_hit, daily_loss_pct = _daily_loss_limit_hit(equity)
+        weekly_loss_limit_hit, weekly_loss_pct = _weekly_loss_limit_hit(equity)
+        consecutive_losses_hit, consecutive_losses_count = _consecutive_losses_hit()
 
     if (
         long_setup is not None
@@ -480,15 +554,17 @@ def _run_setup_engine_cycle(exchange) -> dict:
         and not weekly_loss_limit_hit
         and not consecutive_losses_hit
     ):
-        stop_reference = long_setup.invalidation.level
-        if stop_reference is None or stop_reference >= price:
-            stop_reference = stop_loss_price(price)  # degenerate level: fall back to the flat %
-        size = position_size(quote_balance, price, stop_price=stop_reference)
+        stop_price = long_setup.invalidation.level
+        stop_source = "setup_invalidation_level"
+        if stop_price is None or stop_price >= price:
+            stop_price = stop_loss_price(price)  # degenerate level: fall back to the flat %
+            stop_source = "flat_stop_loss_pct_fallback"
+        size = position_size(quote_balance, price, stop_price=stop_price)
         if size > 0:
             order = place_market_order(exchange, SYMBOL, "buy", size)
             action = "buy"
             filled_amount = float(order.get("filled") or size)
-            stop_order = place_stop_loss_order(exchange, SYMBOL, filled_amount, stop_reference)
+            stop_order = place_stop_loss_order(exchange, SYMBOL, filled_amount, stop_price)
     elif long_setup is not None and not in_position and not context.no_trade and daily_loss_limit_hit:
         action = "entry_blocked_by_daily_loss_limit"
     elif long_setup is not None and not in_position and not context.no_trade and weekly_loss_limit_hit:
@@ -500,7 +576,11 @@ def _run_setup_engine_cycle(exchange) -> dict:
         # not to trade at all right now, or a bearish pattern just
         # confirmed — cancel the protective stop first so it doesn't
         # compete with this market sell for the same (currently locked)
-        # balance.
+        # balance. Precedence matches the condition's own order: a
+        # bearish pattern can fire alongside either of the other two,
+        # but no_trade/bias are checked first since they're the primary
+        # exit rule this cycle's docstring describes.
+        exit_trigger = "no_trade" if context.no_trade else ("bias_flip" if not bullish_bias else "bearish_pattern")
         for stale_order in get_open_stop_loss_orders(exchange, SYMBOL):
             cancel_order(exchange, SYMBOL, stale_order["id"])
         free_balance = get_base_asset_balance(exchange, SYMBOL)
@@ -510,10 +590,12 @@ def _run_setup_engine_cycle(exchange) -> dict:
         # Self-heal, same idea as the EMA cycle: reconstruct a missing
         # stop from the current context's invalidation level rather
         # than leaving the position unprotected.
-        stop_reference = context.invalidation.level
-        if stop_reference is None or stop_reference >= price:
-            stop_reference = stop_loss_price(price)
-        stop_order = place_stop_loss_order(exchange, SYMBOL, total_balance, stop_reference)
+        stop_price = context.invalidation.level
+        stop_source = "setup_invalidation_level"
+        if stop_price is None or stop_price >= price:
+            stop_price = stop_loss_price(price)
+            stop_source = "flat_stop_loss_pct_fallback"
+        stop_order = place_stop_loss_order(exchange, SYMBOL, total_balance, stop_price)
         action = "stop_loss_replaced"
 
     result = {
@@ -523,11 +605,65 @@ def _run_setup_engine_cycle(exchange) -> dict:
         "bias": context.bias.direction.value,
         "in_position_before": in_position,
         "action": action,
+        "reason": _setup_engine_action_reason(
+            action,
+            in_position=in_position,
+            stop_price=stop_price,
+            stop_source=stop_source,
+            exit_trigger=exit_trigger,
+            daily_loss_pct=daily_loss_pct,
+            weekly_loss_pct=weekly_loss_pct,
+            consecutive_losses_count=consecutive_losses_count,
+        ),
         "order_id": order.get("id") if order else None,
         "stop_order_id": stop_order.get("id") if stop_order else None,
+        "stop_price": stop_price,
+        "stop_source": stop_source,
+        "size": size,
+        "risk_pct": RISK_PER_TRADE_PCT if action == "buy" else None,
+        "daily_loss_pct": daily_loss_pct,
+        "weekly_loss_pct": weekly_loss_pct,
+        "consecutive_losses_count": consecutive_losses_count,
     }
     logger.info(result)
     return result
+
+
+def _setup_engine_action_reason(
+    action: str,
+    *,
+    in_position: bool,
+    stop_price,
+    stop_source,
+    exit_trigger,
+    daily_loss_pct,
+    weekly_loss_pct,
+    consecutive_losses_count,
+) -> str:
+    """Same purpose as _ema_action_reason() -- one auditable sentence
+    per action, for the Setup Engine cycle."""
+    if action == "buy":
+        return (
+            f"a confirmed long setup agrees with HTF bias with no position open; sized to risk "
+            f"{RISK_PER_TRADE_PCT}% of capital against a {stop_source} stop at {stop_price}"
+        )
+    if action == "sell":
+        if exit_trigger == "no_trade":
+            return "context now calls no_trade while in position -- exiting"
+        if exit_trigger == "bias_flip":
+            return "HTF bias no longer supports the position -- exiting"
+        return "a bearish chart pattern just confirmed while in position -- exiting regardless of bias"
+    if action == "entry_blocked_by_daily_loss_limit":
+        return f"a confirmed long setup agrees with bias, but today's realized loss ({daily_loss_pct:.2f}%) has hit MAX_DAILY_LOSS_PCT"
+    if action == "entry_blocked_by_weekly_loss_limit":
+        return f"a confirmed long setup agrees with bias, but this week's realized loss ({weekly_loss_pct:.2f}%) has hit MAX_WEEKLY_LOSS_PCT"
+    if action == "entry_blocked_by_consecutive_losses":
+        return f"a confirmed long setup agrees with bias, but the last {consecutive_losses_count} closed trades all lost -- pausing for a win to break the streak"
+    if action == "stop_loss_replaced":
+        return f"in position with no protective stop on the exchange -- rebuilt a {stop_source} stop at {stop_price} from the current context"
+    if in_position:
+        return "in position, bias/context still support it -- holding, waiting for the exit condition"
+    return "no confirmed long setup agreeing with HTF bias right now"
 
 
 def _configure_logging() -> None:

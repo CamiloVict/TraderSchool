@@ -10,7 +10,15 @@ import unittest
 
 import pandas as pd
 
-from risk_manager import consecutive_losses, position_size, stop_loss_price, structural_stop_price
+from config import MAX_DAILY_LOSS_PCT, MAX_WEEKLY_LOSS_PCT
+from risk_manager import (
+    DailyLossTracker,
+    WeeklyLossTracker,
+    consecutive_losses,
+    position_size,
+    stop_loss_price,
+    structural_stop_price,
+)
 
 
 def make_df(closes: list) -> pd.DataFrame:
@@ -91,6 +99,56 @@ class StructuralStopPriceTests(unittest.TestCase):
         stop = structural_stop_price(df, entry_price=90.0, side="short")
 
         self.assertGreater(stop, 100.0, "stop should sit above the swing high, not on top of it")
+
+
+class DailyLossTrackerTests(unittest.TestCase):
+    def test_current_loss_pct_is_zero_before_any_trade(self):
+        tracker = DailyLossTracker(starting_capital=1000.0)
+        self.assertEqual(tracker.current_loss_pct(), 0.0)
+        self.assertTrue(tracker.trading_allowed())
+
+    def test_current_loss_pct_reflects_realized_losses_so_far(self):
+        tracker = DailyLossTracker(starting_capital=1000.0)
+        tracker.record_trade_pnl(-30.0)
+        self.assertAlmostEqual(tracker.current_loss_pct(), 3.0, places=6)
+        self.assertTrue(tracker.trading_allowed())
+
+    def test_a_win_reduces_the_loss_pct_a_prior_loss_had_built_up(self):
+        tracker = DailyLossTracker(starting_capital=1000.0)
+        tracker.record_trade_pnl(-30.0)
+        tracker.record_trade_pnl(10.0)
+        self.assertAlmostEqual(tracker.current_loss_pct(), 2.0, places=6)
+
+    def test_trading_blocked_once_loss_pct_reaches_the_configured_max(self):
+        tracker = DailyLossTracker(starting_capital=1000.0)
+        tracker.record_trade_pnl(-MAX_DAILY_LOSS_PCT * 10)  # well past the limit
+
+        self.assertGreaterEqual(tracker.current_loss_pct(), MAX_DAILY_LOSS_PCT)
+        self.assertFalse(tracker.trading_allowed())
+
+    def test_zero_starting_capital_blocks_trading_without_dividing_by_zero(self):
+        tracker = DailyLossTracker(starting_capital=0.0)
+        self.assertEqual(tracker.current_loss_pct(), 0.0)
+        self.assertFalse(tracker.trading_allowed())
+
+
+class WeeklyLossTrackerTests(unittest.TestCase):
+    def test_current_loss_pct_reflects_realized_losses_so_far(self):
+        tracker = WeeklyLossTracker(starting_capital=1000.0)
+        tracker.record_trade_pnl(-150.0)
+        self.assertAlmostEqual(tracker.current_loss_pct(), 15.0, places=6)
+
+    def test_trading_blocked_once_loss_pct_reaches_the_configured_max(self):
+        tracker = WeeklyLossTracker(starting_capital=1000.0)
+        tracker.record_trade_pnl(-MAX_WEEKLY_LOSS_PCT * 10)
+
+        self.assertGreaterEqual(tracker.current_loss_pct(), MAX_WEEKLY_LOSS_PCT)
+        self.assertFalse(tracker.trading_allowed())
+
+    def test_zero_starting_capital_blocks_trading_without_dividing_by_zero(self):
+        tracker = WeeklyLossTracker(starting_capital=0.0)
+        self.assertEqual(tracker.current_loss_pct(), 0.0)
+        self.assertFalse(tracker.trading_allowed())
 
 
 def make_trade(id, timestamp, side, price, amount=1.0):
