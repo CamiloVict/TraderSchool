@@ -130,18 +130,25 @@ class FakeExchange:
     executor.py call: fetch_ohlcv, fetch_balance, create_order,
     cancel_order, fetch_open_orders, fetch_my_trades."""
 
-    def __init__(self, candles, free=None, locked=None, open_orders=None, trades=None, prices=None):
+    def __init__(self, candles, free=None, locked=None, open_orders=None, trades=None, prices=None, market_limits=None):
         self._candles = candles
         self.free = dict(free or {})
         self.locked = dict(locked or {})
         self._open_orders = list(open_orders or [])
         self._trades = list(trades or [])
         self.prices = dict(prices or {})
+        # No minimums by default -- most tests aren't about exchange
+        # filters, and this matches meets_exchange_minimums()'s own
+        # "no limits reported" pass-through.
+        self._market_limits = market_limits or {"amount": {"min": None}, "cost": {"min": None}}
         self.created_orders = []
         self.cancelled_ids = []
 
     def fetch_ticker(self, symbol):
         return {"last": self.prices[symbol]}
+
+    def market(self, symbol):
+        return {"limits": self._market_limits}
 
     def fetch_ohlcv(self, symbol, timeframe=None, limit=None, since=None):
         return self._candles
@@ -396,6 +403,21 @@ class EmaAuditFieldsTests(unittest.TestCase):
         result = main.run_trading_cycle(FakeExchange(flat_candles, free={"USDT": 1000.0}))
         self.assertEqual(result["action"], "hold")
         self.assertIn("no EMA entry signal", result["reason"])
+
+    def test_skips_the_entry_when_the_sized_position_is_below_the_exchanges_minimum_notional(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        # A minimum notional far above what RISK_PER_TRADE_PCT would
+        # ever size on this account -- every risk check passes, but
+        # the order itself still isn't executable on this market.
+        exchange = FakeExchange(
+            candles, free={"USDT": 1000.0}, market_limits={"amount": {"min": None}, "cost": {"min": 1_000_000.0}}
+        )
+
+        result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_skipped_below_exchange_minimum")
+        self.assertIn("minimum notional", result["reason"])
+        self.assertEqual(exchange.created_orders, [])
 
 
 class PortfolioRiskGateTests(unittest.TestCase):
@@ -841,6 +863,30 @@ class SetupEngineTradingCycleTests(unittest.TestCase):
         self.assertIn("setup_invalidation_level", result["reason"])
         self.assertIn("9000.0", result["reason"])
         self.assertEqual(result["risk_pct"], 1.0)
+
+    def test_skips_the_entry_when_the_sized_position_is_below_the_exchanges_minimum_notional(self):
+        from context_engine.schema import Direction, Invalidation, Setup, SetupName
+
+        setup = Setup(
+            name=SetupName.LIQUIDITY_SWEEP_RECLAIM,
+            direction=Direction.LONG,
+            reasons=["fake"],
+            invalidation=Invalidation(type="CLOSE_BELOW", level=9000.0, detail="fake"),
+        )
+        snapshot = make_snapshot(setups=[setup], invalidation_level=9000.0)
+        exchange = FakeExchange(
+            make_candles(5, 10000, 0),
+            free={"USDT": 1000.0},
+            market_limits={"amount": {"min": None}, "cost": {"min": 1_000_000.0}},
+        )
+
+        p1, p2, p3, p4 = self._patches(snapshot)
+        with p1, p2, p3, p4:
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_skipped_below_exchange_minimum")
+        self.assertIn("minimum notional", result["reason"])
+        self.assertEqual(exchange.created_orders, [])
 
     def test_exit_reason_distinguishes_no_trade_bias_flip_and_bearish_pattern(self):
         from context_engine.schema import Bias

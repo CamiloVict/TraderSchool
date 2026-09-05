@@ -795,6 +795,20 @@ Sigue sin haber backend: todo sale de JSON estáticos en
   (ver más abajo), así que el chequeo casi siempre ve balance cero del
   otro activo — construido y testeado igual, listo para el día que BTC
   sí opere en vivo
+- [x] `executor.meets_exchange_minimums()`: `risk_manager.position_size()`
+  es matemática de riesgo pura, sin idea de los filtros propios de
+  Binance (`LOT_SIZE`/`MIN_NOTIONAL`) — una posición bien dimensionada
+  para `RISK_PER_TRADE_PCT` igual puede salir por debajo de lo mínimo
+  que Binance acepta (una cuenta chica, o un stop inusualmente cerca de
+  la entrada), y sin este chequeo esa orden llegaba a `create_order()`
+  para que Binance la rechace, apareciendo como un fallo no controlado
+  del ciclo (`logger.exception("Trading cycle failed")`) en vez de una
+  decisión normal de "esta operación no es ejecutable a este tamaño de
+  cuenta". Ahora ambos ciclos (EMA y Setup Engine) chequean esto antes
+  de llamar a `create_order()` y, si no pasa, declinan con
+  `entry_skipped_below_exchange_minimum` y el motivo exacto en `reason`
+  — mismo tratamiento que cualquier otro límite de riesgo, no una
+  excepción que tira abajo el ciclo
 - [x] `backtester.py --take-profit`: experimento (apagado por defecto,
   no conectado a `main.py --trade`) de un take-profit fijo en
   `risk_manager.take_profit_price()` (`TAKE_PROFIT_PCT`), la versión

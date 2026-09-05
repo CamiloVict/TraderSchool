@@ -18,9 +18,21 @@ from executor import (
     get_base_asset_balance,
     get_last_fill_price,
     get_open_stop_loss_orders,
+    meets_exchange_minimums,
     place_market_order,
     place_stop_loss_order,
 )
+
+
+class MarketLookupExchange:
+    """Stand-in exposing only .market(symbol), for
+    meets_exchange_minimums()'s own tests."""
+
+    def __init__(self, limits: dict):
+        self._limits = limits
+
+    def market(self, symbol):
+        return {"limits": self._limits}
 
 
 class RecordingExchange:
@@ -98,6 +110,44 @@ class ClientOrderIdTests(unittest.TestCase):
         params = exchange.created_orders[0]["params"]
         self.assertIn("newClientOrderId", params)
         self.assertEqual(params["stopPrice"], 100.0)
+
+
+class MeetsExchangeMinimumsTests(unittest.TestCase):
+    def test_ok_when_amount_and_notional_both_clear_the_markets_limits(self):
+        exchange = MarketLookupExchange({"amount": {"min": 0.0001}, "cost": {"min": 10.0}})
+
+        ok, reason = meets_exchange_minimums(exchange, "BTC/USDT", amount=0.01, price=50_000.0)
+
+        self.assertTrue(ok)
+        self.assertIsNone(reason)
+
+    def test_rejects_an_amount_below_the_markets_minimum_quantity(self):
+        exchange = MarketLookupExchange({"amount": {"min": 0.001}, "cost": {"min": 10.0}})
+
+        ok, reason = meets_exchange_minimums(exchange, "BTC/USDT", amount=0.0001, price=50_000.0)
+
+        self.assertFalse(ok)
+        self.assertIn("minimum order quantity", reason)
+
+    def test_rejects_a_notional_below_the_markets_minimum_notional(self):
+        # Amount alone clears the LOT_SIZE minimum, but amount*price is
+        # still below MIN_NOTIONAL -- a small stop distance can produce
+        # exactly this on a small account.
+        exchange = MarketLookupExchange({"amount": {"min": 0.0001}, "cost": {"min": 10.0}})
+
+        ok, reason = meets_exchange_minimums(exchange, "BTC/USDT", amount=0.0001, price=50_000.0)
+        # 0.0001 * 50000 = 5.0, below the 10.0 minimum notional.
+
+        self.assertFalse(ok)
+        self.assertIn("minimum notional", reason)
+
+    def test_ok_when_the_market_reports_no_limits_at_all(self):
+        exchange = MarketLookupExchange({"amount": {"min": None}, "cost": {"min": None}})
+
+        ok, reason = meets_exchange_minimums(exchange, "BTC/USDT", amount=0.0000001, price=1.0)
+
+        self.assertTrue(ok)
+        self.assertIsNone(reason)
 
 
 class ReadRetryTests(unittest.TestCase):

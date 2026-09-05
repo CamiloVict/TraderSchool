@@ -49,6 +49,35 @@ def _assert_testnet() -> None:
         )
 
 
+def meets_exchange_minimums(exchange: ccxt.binance, symbol: str, amount: float, price: float) -> tuple:
+    """(ok, reason): whether `amount` at `price` would clear this
+    market's own LOT_SIZE (minimum quantity) and MIN_NOTIONAL (minimum
+    amount*price) filters on Binance -- checked here, before ever
+    calling create_order(), so main.py can decline a trade with a
+    clear, loggable reason instead of letting Binance's own rejection
+    surface as an unhandled exception mid-cycle. `reason` is None when
+    `ok` is True.
+
+    risk_manager.position_size() has no notion of a specific exchange's
+    filters (it's pure risk math), so a real position sized correctly
+    for RISK_PER_TRADE_PCT can still come out below what Binance will
+    actually accept -- e.g. a small account, or a stop placed unusually
+    close to entry. That is a real, expected outcome (this trade just
+    isn't executable at this account size), not a bug to route around
+    by second-guessing the risk math.
+    """
+    market = exchange.market(symbol)
+    limits = market.get("limits") or {}
+    min_qty = (limits.get("amount") or {}).get("min")
+    if min_qty is not None and amount < min_qty:
+        return False, f"amount {amount} is below {symbol}'s minimum order quantity ({min_qty})"
+    min_notional = (limits.get("cost") or {}).get("min")
+    notional = amount * price
+    if min_notional is not None and notional < min_notional:
+        return False, f"order notional {notional:.2f} is below {symbol}'s minimum notional ({min_notional})"
+    return True, None
+
+
 def place_market_order(exchange: ccxt.binance, symbol: str, side: str, amount: float) -> dict:
     """Place a market order on Testnet. `side` is 'buy' or 'sell'."""
     _assert_testnet()
