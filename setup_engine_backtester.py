@@ -54,7 +54,7 @@ from context_engine.engine import build_context
 from context_engine.schema import Bias, Direction
 from context_engine.timeframes import build_timeframe_set
 from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
-from risk_manager import stop_loss_price
+from risk_manager import position_size, stop_loss_price
 
 SETUP_ENGINE_VERSION = "0.1.0"
 
@@ -81,11 +81,12 @@ def simulate_setup_engine(
             "Fetch more history or lower --context-window-days."
         )
 
-    capital = initial_capital
+    capital = initial_capital  # total account value (cash + any open position, at cost)
     position = 0
     entry_price = 0.0
     entry_time = None
     stop_price = None
+    size = 0.0  # base-asset units held while in position
     trades = []
     equity_curve = []
     total_fees_paid = 0.0
@@ -104,9 +105,9 @@ def simulate_setup_engine(
         low = float(history["low"].iloc[i])
 
         if position == 1 and stop_price is not None and low <= stop_price:
-            capital *= stop_price / entry_price
-            fee = capital * TAKER_FEE_PCT / 100
-            capital -= fee
+            proceeds = size * stop_price
+            fee = proceeds * TAKER_FEE_PCT / 100
+            capital = capital - (size * entry_price) + proceeds - fee
             total_fees_paid += fee
             trades.append(
                 {
@@ -121,18 +122,29 @@ def simulate_setup_engine(
             )
             position = 0
             stop_price = None
+            size = 0.0
         elif position == 0:
             long_setup = next((s for s in context.setups if s.direction == Direction.LONG), None)
             if long_setup is not None and not context.no_trade:
-                position = 1
-                entry_price = price
-                entry_time = timestamp
-                stop_price = long_setup.invalidation.level
-                if stop_price is None or stop_price >= entry_price:
-                    stop_price = stop_loss_price(entry_price)  # degenerate level: fall back to the flat %
-                fee = capital * TAKER_FEE_PCT / 100
-                capital -= fee
-                total_fees_paid += fee
+                candidate_stop = long_setup.invalidation.level
+                if candidate_stop is None or candidate_stop >= price:
+                    candidate_stop = stop_loss_price(price)  # degenerate level: fall back to the flat %
+                # Same sizing main.py --trade actually places live: risking
+                # RISK_PER_TRADE_PCT of capital against this stop, not the
+                # whole account -- see backtester.py's own fix for why
+                # "100% of capital every trade" overstates both return and
+                # risk. Same zero-size guard as main.py's `if size > 0:`.
+                candidate_size = position_size(capital, price, stop_price=candidate_stop)
+                if candidate_size > 0:
+                    position = 1
+                    entry_price = price
+                    entry_time = timestamp
+                    stop_price = candidate_stop
+                    size = candidate_size
+                    cost = size * entry_price
+                    fee = cost * TAKER_FEE_PCT / 100
+                    capital -= fee
+                    total_fees_paid += fee
         elif position == 1:
             bullish = context.bias.direction in (Bias.BULLISH, Bias.STRONG_BULLISH)
             # A freshly-confirmed bearish chart pattern closes the
@@ -148,9 +160,9 @@ def simulate_setup_engine(
             # cost on every candle of an already-slow backtest.
             bearish_pattern = bool(bearish_veto_mask(detect_reversal_patterns(base), PATTERN_VETO_LOOKBACK).iloc[-1])
             if context.no_trade or not bullish or bearish_pattern:
-                capital *= price / entry_price
-                fee = capital * TAKER_FEE_PCT / 100
-                capital -= fee
+                proceeds = size * price
+                fee = proceeds * TAKER_FEE_PCT / 100
+                capital = capital - (size * entry_price) + proceeds - fee
                 total_fees_paid += fee
                 if context.no_trade:
                     exit_reason = "no_trade"
@@ -171,8 +183,12 @@ def simulate_setup_engine(
                 )
                 position = 0
                 stop_price = None
+                size = 0.0
 
-        equity_curve.append(capital * (price / entry_price) if position == 1 else capital)
+        if position == 1:
+            equity_curve.append(capital - (size * entry_price) + (size * price))
+        else:
+            equity_curve.append(capital)
         snapshots.append(
             {
                 "timestamp": timestamp.isoformat(),

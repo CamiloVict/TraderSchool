@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 import setup_engine_backtester as seb
+from config import RISK_PER_TRADE_PCT
 from context_engine.schema import (
     Alignment,
     Bias,
@@ -196,6 +197,16 @@ class PnLTests(unittest.TestCase):
         self.assertEqual(trades[0]["exit_reason"], "stop_loss")
         self.assertEqual(trades[0]["exit_price"], 9500.0)
         self.assertEqual(metrics["stop_loss_exits"], 1)
+
+        # The invalidation level is 5% below entry (9500 vs 10000), but
+        # main.py --trade never risks more than RISK_PER_TRADE_PCT of
+        # capital on one trade (risk_manager.position_size) -- a
+        # backtest that instead put 100% of capital into the trade
+        # would show a loss close to that full 5%, wildly overstating
+        # both the return and the risk the live bot actually takes.
+        loss_pct_of_capital = (1000.0 - metrics["final_capital"]) / 1000.0 * 100
+        self.assertLess(loss_pct_of_capital, 5.0)
+        self.assertAlmostEqual(loss_pct_of_capital, RISK_PER_TRADE_PCT, delta=0.5)
 
     def test_exits_on_a_bearish_bias_flip_without_touching_the_stop(self):
         history = make_history_df(35, start_price=10000.0, step=0.0)
