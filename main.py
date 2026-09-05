@@ -116,6 +116,7 @@ from data_fetcher import fetch_ohlcv, get_exchange
 from heartbeat import record_heartbeat
 from notifier import notify
 from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
+import portfolio_risk
 from retry import call_with_retries
 from risk_manager import DailyLossTracker, WeeklyLossTracker, consecutive_losses
 from strategy import SLOW_PERIOD, add_signals
@@ -172,6 +173,16 @@ def _consecutive_losses_hit() -> tuple:
     journal = read_journal()
     count = consecutive_losses(journal)
     return count >= MAX_CONSECUTIVE_LOSSES, count
+
+
+def _portfolio_risk_limit_hit(exchange) -> bool:
+    """True if the OTHER tracked bot (see portfolio_risk.py) already
+    has a real position open, and adding this one on top would exceed
+    MAX_PORTFOLIO_RISK_PCT combined. See that module's own docstring
+    for why this is currently dormant in practice (BTC isn't traded by
+    any live cycle yet) but built and tested anyway.
+    """
+    return portfolio_risk.portfolio_risk_limit_hit(exchange, SYMBOL)
 
 
 def check_connection() -> None:
@@ -319,6 +330,7 @@ def _run_ema_cycle(exchange) -> dict:
     daily_loss_limit_hit = False
     weekly_loss_limit_hit = False
     consecutive_losses_hit = False
+    portfolio_risk_limit_hit = False
     if signal == 1 and not in_position:
         if USE_PATTERN_FILTER:
             pattern_signal = detect_reversal_patterns(data)
@@ -330,6 +342,7 @@ def _run_ema_cycle(exchange) -> dict:
         daily_loss_limit_hit, daily_loss_pct = _daily_loss_limit_hit(equity)
         weekly_loss_limit_hit, weekly_loss_pct = _weekly_loss_limit_hit(equity)
         consecutive_losses_hit, consecutive_losses_count = _consecutive_losses_hit()
+        portfolio_risk_limit_hit = _portfolio_risk_limit_hit(exchange)
 
     if (
         signal == 1
@@ -338,6 +351,7 @@ def _run_ema_cycle(exchange) -> dict:
         and not daily_loss_limit_hit
         and not weekly_loss_limit_hit
         and not consecutive_losses_hit
+        and not portfolio_risk_limit_hit
     ):
         stop_price = stop_for(price)
         stop_source = "structural_swing_low" if USE_STRUCTURAL_STOP else "flat_stop_loss_pct"
@@ -360,6 +374,8 @@ def _run_ema_cycle(exchange) -> dict:
         action = "entry_blocked_by_weekly_loss_limit"
     elif signal == 1 and not in_position and consecutive_losses_hit:
         action = "entry_blocked_by_consecutive_losses"
+    elif signal == 1 and not in_position and portfolio_risk_limit_hit:
+        action = "entry_blocked_by_portfolio_risk"
     elif signal == 0 and in_position:
         # Cancel the protective stop first so it doesn't compete with
         # this market sell for the same (currently locked) balance.
@@ -440,6 +456,8 @@ def _ema_action_reason(
         return f"EMA signal is bullish, but this week's realized loss ({weekly_loss_pct:.2f}%) has hit MAX_WEEKLY_LOSS_PCT"
     if action == "entry_blocked_by_consecutive_losses":
         return f"EMA signal is bullish, but the last {consecutive_losses_count} closed trades all lost -- pausing for a win to break the streak"
+    if action == "entry_blocked_by_portfolio_risk":
+        return "EMA signal is bullish, but the other tracked bot already has a position open and combined risk would exceed MAX_PORTFOLIO_RISK_PCT"
     if action == "stop_loss_replaced":
         return f"in position with no protective stop on the exchange -- rebuilt a {stop_source} stop at {stop_price} from the last buy fill"
     if in_position:
@@ -539,12 +557,14 @@ def _run_setup_engine_cycle(exchange) -> dict:
     daily_loss_limit_hit = False
     weekly_loss_limit_hit = False
     consecutive_losses_hit = False
+    portfolio_risk_limit_hit = False
     if long_setup is not None and not in_position and not context.no_trade:
         quote_balance = get_quote_asset_balance(exchange, SYMBOL)
         equity = quote_balance + total_balance * price
         daily_loss_limit_hit, daily_loss_pct = _daily_loss_limit_hit(equity)
         weekly_loss_limit_hit, weekly_loss_pct = _weekly_loss_limit_hit(equity)
         consecutive_losses_hit, consecutive_losses_count = _consecutive_losses_hit()
+        portfolio_risk_limit_hit = _portfolio_risk_limit_hit(exchange)
 
     if (
         long_setup is not None
@@ -553,6 +573,7 @@ def _run_setup_engine_cycle(exchange) -> dict:
         and not daily_loss_limit_hit
         and not weekly_loss_limit_hit
         and not consecutive_losses_hit
+        and not portfolio_risk_limit_hit
     ):
         stop_price = long_setup.invalidation.level
         stop_source = "setup_invalidation_level"
@@ -571,6 +592,8 @@ def _run_setup_engine_cycle(exchange) -> dict:
         action = "entry_blocked_by_weekly_loss_limit"
     elif long_setup is not None and not in_position and not context.no_trade and consecutive_losses_hit:
         action = "entry_blocked_by_consecutive_losses"
+    elif long_setup is not None and not in_position and not context.no_trade and portfolio_risk_limit_hit:
+        action = "entry_blocked_by_portfolio_risk"
     elif in_position and (context.no_trade or not bullish_bias or bearish_pattern):
         # The bias that justified this position is gone, context says
         # not to trade at all right now, or a bearish pattern just
@@ -659,6 +682,8 @@ def _setup_engine_action_reason(
         return f"a confirmed long setup agrees with bias, but this week's realized loss ({weekly_loss_pct:.2f}%) has hit MAX_WEEKLY_LOSS_PCT"
     if action == "entry_blocked_by_consecutive_losses":
         return f"a confirmed long setup agrees with bias, but the last {consecutive_losses_count} closed trades all lost -- pausing for a win to break the streak"
+    if action == "entry_blocked_by_portfolio_risk":
+        return "a confirmed long setup agrees with bias, but the other tracked bot already has a position open and combined risk would exceed MAX_PORTFOLIO_RISK_PCT"
     if action == "stop_loss_replaced":
         return f"in position with no protective stop on the exchange -- rebuilt a {stop_source} stop at {stop_price} from the current context"
     if in_position:

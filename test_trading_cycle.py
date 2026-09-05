@@ -12,9 +12,17 @@ from unittest.mock import patch
 import pandas as pd
 
 import main
+import portfolio_risk
 import risk_manager
 from config import MAX_CONSECUTIVE_LOSSES, SYMBOL
 from strategy import SLOW_PERIOD
+
+# main.py's own SYMBOL is configurable (.env) -- whichever of the two
+# tracked symbols it ISN'T is "the other tracked bot" for
+# portfolio_risk.py's purposes, dynamically, so these tests don't
+# assume PAXG/USDT is the one actually configured in this environment.
+OTHER_SYMBOL = portfolio_risk._other_tracked_symbol(SYMBOL)
+OTHER_BASE_ASSET = OTHER_SYMBOL.split("/")[0]
 
 
 def _stub_disk_touching_side_effects(test_case):
@@ -122,14 +130,18 @@ class FakeExchange:
     executor.py call: fetch_ohlcv, fetch_balance, create_order,
     cancel_order, fetch_open_orders, fetch_my_trades."""
 
-    def __init__(self, candles, free=None, locked=None, open_orders=None, trades=None):
+    def __init__(self, candles, free=None, locked=None, open_orders=None, trades=None, prices=None):
         self._candles = candles
         self.free = dict(free or {})
         self.locked = dict(locked or {})
         self._open_orders = list(open_orders or [])
         self._trades = list(trades or [])
+        self.prices = dict(prices or {})
         self.created_orders = []
         self.cancelled_ids = []
+
+    def fetch_ticker(self, symbol):
+        return {"last": self.prices[symbol]}
 
     def fetch_ohlcv(self, symbol, timeframe=None, limit=None, since=None):
         return self._candles
@@ -384,6 +396,57 @@ class EmaAuditFieldsTests(unittest.TestCase):
         result = main.run_trading_cycle(FakeExchange(flat_candles, free={"USDT": 1000.0}))
         self.assertEqual(result["action"], "hold")
         self.assertIn("no EMA entry signal", result["reason"])
+
+
+class PortfolioRiskGateTests(unittest.TestCase):
+    """main.py's SYMBOL is PAXG/USDT by default, so BTC is "the other
+    tracked bot" here (see portfolio_risk.py) -- a real BTC balance on
+    the account should block a new PAXG entry once combined risk would
+    exceed MAX_PORTFOLIO_RISK_PCT, same as any other risk limit."""
+
+    def setUp(self):
+        _stub_disk_touching_side_effects(self)
+
+    def test_blocks_a_new_entry_when_the_other_tracked_bot_already_has_a_position(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(
+            candles, free={"USDT": 1000.0, OTHER_BASE_ASSET: 0.01}, prices={OTHER_SYMBOL: 50_000.0}
+        )
+
+        result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_blocked_by_portfolio_risk")
+        self.assertIn("MAX_PORTFOLIO_RISK_PCT", result["reason"])
+        self.assertEqual(exchange.created_orders, [])
+
+    def test_does_not_block_when_the_other_tracked_bot_has_no_real_balance(self):
+        candles = make_candles(200, start_price=10000, step=10)
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})  # no balance of the other asset at all
+
+        result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "buy")
+
+    def test_does_not_block_when_the_other_balance_is_dust(self):
+        candles = make_candles(200, start_price=10000, step=10)
+        exchange = FakeExchange(
+            candles, free={"USDT": 1000.0, OTHER_BASE_ASSET: 0.0001}, prices={OTHER_SYMBOL: 50_000.0}
+        )
+
+        result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "buy")
+
+    def test_does_not_block_when_the_portfolio_cap_is_wide_enough(self):
+        candles = make_candles(200, start_price=10000, step=10)
+        exchange = FakeExchange(
+            candles, free={"USDT": 1000.0, OTHER_BASE_ASSET: 0.01}, prices={OTHER_SYMBOL: 50_000.0}
+        )
+
+        with patch("portfolio_risk.MAX_PORTFOLIO_RISK_PCT", 3.0):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "buy")
 
 
 class NotifyWiringTests(unittest.TestCase):

@@ -48,6 +48,16 @@ MAX_WEEKLY_LOSS_PCT = float(os.getenv("MAX_WEEKLY_LOSS_PCT", "10.0"))
 # note on why risk is never auto-adjusted from a losing streak without
 # separate, deliberate evidence that doing so helps.
 MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "5"))
+# Cross-asset circuit breaker (see portfolio_risk.py): the max combined
+# RISK_PER_TRADE_PCT this account should have open across the two
+# tracked bots (PAXG and BTC) at once. Both bots size independently
+# against only their own equity slice, so two live positions at once
+# could otherwise stack real simultaneous risk with neither side aware
+# of the other. Below 2x RISK_PER_TRADE_PCT by default (a plain
+# worst-case sum, not correlation-adjusted -- PAXG/gold and BTC have no
+# established correlation to model), forcing a real tradeoff instead of
+# silently allowing both at full size.
+MAX_PORTFOLIO_RISK_PCT = float(os.getenv("MAX_PORTFOLIO_RISK_PCT", "1.5"))
 # How far below the stop-loss trigger the STOP_LOSS_LIMIT's limit price
 # sits, so the order still fills during a fast drop instead of resting
 # unfilled above the market once triggered.

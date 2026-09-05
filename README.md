@@ -776,6 +776,25 @@ Sigue sin haber backend: todo sale de JSON estáticos en
   cierre en ganancia. No ajusta el riesgo por operación automáticamente
   — eso necesitaría evidencia estadística de que ayuda, no solo una
   mala racha
+- [x] `portfolio_risk.py` + `MAX_PORTFOLIO_RISK_PCT`: riesgo
+  correlacionado entre los dos bots que trackea este repo (PAXG y
+  BTC) — cada uno dimensiona sus propias entradas contra solo su
+  propio equity, así que dos posiciones abiertas a la vez en la misma
+  cuenta podrían sumar más riesgo simultáneo real del que cualquiera
+  de los dos config values sugiere por separado. Antes de abrir una
+  entrada nueva, chequea si el balance del *otro* símbolo trackeado ya
+  vale más que el mismo umbral de $10 que usa `in_position` en
+  cualquier otro lado de este código — si sí, y `2x RISK_PER_TRADE_PCT`
+  superaría `MAX_PORTFOLIO_RISK_PCT`, bloquea con
+  `entry_blocked_by_portfolio_risk`. Suma simple, no ajustada por
+  correlación — PAXG (oro) y BTC no tienen una correlación establecida
+  que modelar, así que sumar en el peor caso es la opción honesta y
+  conservadora hasta que haya historial real multi-activo que
+  justifique algo más fino. **Hoy está inactivo en la práctica**:
+  `scalping_backtester.py` no está conectado a ningún ciclo en vivo
+  (ver más abajo), así que el chequeo casi siempre ve balance cero del
+  otro activo — construido y testeado igual, listo para el día que BTC
+  sí opere en vivo
 - [x] `backtester.py --take-profit`: experimento (apagado por defecto,
   no conectado a `main.py --trade`) de un take-profit fijo en
   `risk_manager.take_profit_price()` (`TAKE_PROFIT_PCT`), la versión
