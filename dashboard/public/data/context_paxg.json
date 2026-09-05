@@ -7,10 +7,22 @@
     "degraded": true,
     "issues": [
       {
+        "code": "NO_VOLUME",
+        "severity": "WARNING",
+        "timeframe": "1w",
+        "detail": "no volume column; volume confirmation is unavailable"
+      },
+      {
         "code": "SHORT_HISTORY",
         "severity": "WARNING",
         "timeframe": "1w",
         "detail": "only 53 candles (want >= 60)"
+      },
+      {
+        "code": "NO_VOLUME",
+        "severity": "WARNING",
+        "timeframe": "1d",
+        "detail": "no volume column; volume confirmation is unavailable"
       },
       {
         "code": "ANOMALOUS_GAP",
@@ -19,10 +31,22 @@
         "detail": "1 close-to-close move(s) above 10.0x the typical range (largest 294.17)"
       },
       {
+        "code": "NO_VOLUME",
+        "severity": "WARNING",
+        "timeframe": "4h",
+        "detail": "no volume column; volume confirmation is unavailable"
+      },
+      {
         "code": "ANOMALOUS_GAP",
         "severity": "WARNING",
         "timeframe": "1h",
         "detail": "3 close-to-close move(s) above 10.0x the typical range (largest 271.70)"
+      },
+      {
+        "code": "NO_VOLUME",
+        "severity": "WARNING",
+        "timeframe": "1h",
+        "detail": "no volume column; volume confirmation is unavailable"
       }
     ]
   },

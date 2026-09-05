@@ -8,10 +8,13 @@ when several independent pieces of evidence — bias, a liquidity event,
 its reclaim, its displacement, and lower-timeframe structure —
 converge on the same conclusion at the same time.
 
-Scope: one setup, LIQUIDITY_SWEEP_RECLAIM (section 43's worked
-example), because it is the one the engine already has every input
-for: bias from bias.py, the swept-and-reclaimed level from
-liquidity.py, confirming structure from structure.py. Adding another
+Scope: LIQUIDITY_SWEEP_RECLAIM (section 43's worked example) uses
+inputs the engine already had: bias from bias.py, the swept-and-
+reclaimed level from liquidity.py, confirming structure from
+structure.py. CHART_PATTERN_REVERSAL reuses patterns.py's reversal-
+pattern detector the same way — a confirmed pattern is never sufficient
+on its own (patterns.py's own docstring says so), so it only fires when
+HTF bias agrees, same rule as the sweep-reclaim setup. Adding another
 setup means adding another function here plus a schema.SetupName
 member — never a name without a matching detector.
 
@@ -54,6 +57,7 @@ def detect_liquidity_sweep_reclaim(
     bias: Bias,
     invalidation: Invalidation,
     execution_timeframe: str,
+    execution_df=None,
 ) -> Setup:
     """LIQUIDITY_SWEEP_RECLAIM: HTF bias, a swept level that reclaimed
     with displacement, and a same-direction execution-timeframe BOS
@@ -96,22 +100,83 @@ def detect_liquidity_sweep_reclaim(
     return Setup(name=SetupName.LIQUIDITY_SWEEP_RECLAIM, direction=direction, reasons=reasons, invalidation=invalidation)
 
 
+def detect_chart_pattern_reversal(
+    structures: dict,
+    liquidity,
+    bias: Bias,
+    invalidation: Invalidation,
+    execution_timeframe: str,
+    execution_df=None,
+) -> Setup:
+    """CHART_PATTERN_REVERSAL: a classical reversal chart pattern
+    (double-top/bottom, head-and-shoulders/inverse, or triangle —
+    patterns.detect_reversal_patterns) confirmed within the last
+    PATTERN_VETO_LOOKBACK candles of the execution timeframe, in the
+    same direction as HTF bias.
+
+    The bias requirement is the whole point, not an afterthought: a
+    reversal pattern with no HTF bias behind it is exactly the "isolated
+    pattern" patterns.py's own docstring says is not a sufficient
+    signal (weak evidence even as confirmation, per the academic
+    literature it cites). Requiring both to agree is what turns it into
+    one, on the same footing as LIQUIDITY_SWEEP_RECLAIM's own bias +
+    liquidity-event + BOS conjunction.
+
+    Returns None if `execution_df` is missing/too short for pattern
+    detection, or no qualifying pattern confirmed recently.
+    """
+    # Imported here, not at module level: patterns.py itself imports
+    # context_engine.schema/structure, and this package's __init__
+    # imports engine.py -> setups.py before patterns.py would finish
+    # initializing -- a module-level import here is a circular import
+    # (patterns -> context_engine -> setups -> patterns, mid-init).
+    # Deferring it until this function actually runs sidesteps that.
+    from patterns import PATTERN_VETO_LOOKBACK, detect_reversal_patterns
+
+    if execution_df is None or len(execution_df) < 20:
+        return None
+
+    if bias in _BULLISH_BIAS:
+        direction = Direction.LONG
+        wanted_signal = 1
+        label = "bullish"
+    elif bias in _BEARISH_BIAS:
+        direction = Direction.SHORT
+        wanted_signal = -1
+        label = "bearish"
+    else:
+        return None
+
+    signal = detect_reversal_patterns(execution_df)
+    recent = signal.iloc[-PATTERN_VETO_LOOKBACK:]
+    if wanted_signal not in recent.values:
+        return None
+
+    reasons = [
+        f"HTF bias {label}",
+        f"a {label} reversal chart pattern confirmed within the last {PATTERN_VETO_LOOKBACK} "
+        f"{execution_timeframe} candles",
+    ]
+    return Setup(name=SetupName.CHART_PATTERN_REVERSAL, direction=direction, reasons=reasons, invalidation=invalidation)
+
+
 def detect_setups(
     structures: dict,
     liquidity,
     bias: Bias,
     invalidation: Invalidation,
     execution_timeframe: str,
+    execution_df=None,
 ) -> list:
     """Every setup that fires for this snapshot. Order matters only for
     display — nothing downstream currently picks "the first" over
     another; that ranking is left for whoever consumes preferred_setups
     next (the master prompt reserves that judgment for context, not for
     this engine to guess)."""
-    detectors = (detect_liquidity_sweep_reclaim,)
+    detectors = (detect_liquidity_sweep_reclaim, detect_chart_pattern_reversal)
     setups = []
     for detector in detectors:
-        setup = detector(structures, liquidity, bias, invalidation, execution_timeframe)
+        setup = detector(structures, liquidity, bias, invalidation, execution_timeframe, execution_df)
         if setup is not None:
             setups.append(setup)
     return setups

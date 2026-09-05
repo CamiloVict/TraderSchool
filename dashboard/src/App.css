@@ -255,6 +255,15 @@ details[open] > .explainer__summary::before {
   margin-bottom: 8px;
 }
 
+.explainer__body li ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.explainer__body li ul li {
+  margin-bottom: 4px;
+}
+
 .explainer__note {
   margin: 0;
 }

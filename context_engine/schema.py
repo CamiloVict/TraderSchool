@@ -143,12 +143,18 @@ class Direction(str, Enum):
 
 class SetupName(str, Enum):
     """Master prompt section 17. One member per setup the Setup Engine
-    knows how to detect — deliberately starting with just one; adding a
-    name here without a matching detector in context_engine/setups.py
-    would be exactly the kind of setup the design forbids (defined but
-    never actually checked)."""
+    knows how to detect — adding a name here without a matching
+    detector in context_engine/setups.py would be exactly the kind of
+    setup the design forbids (defined but never actually checked)."""
 
     LIQUIDITY_SWEEP_RECLAIM = "LIQUIDITY_SWEEP_RECLAIM"
+    # A classical reversal chart pattern (double-top/bottom,
+    # head-and-shoulders/inverse, triangle — see patterns.py) confirmed
+    # on the execution timeframe *and* agreeing with HTF bias. Never
+    # fires on the pattern alone: patterns.py's own docstring is explicit
+    # that these are weak evidence, confirmation at best, never a
+    # stand-alone signal.
+    CHART_PATTERN_REVERSAL = "CHART_PATTERN_REVERSAL"
 
 
 class Severity(str, Enum):

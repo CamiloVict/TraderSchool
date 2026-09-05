@@ -146,7 +146,10 @@ STATE_DEFINITIONS = {
         state=MarketState.REVERSAL_ATTEMPT,
         entry_conditions=("a CHOCH just broke the prevailing structure",),
         exit_conditions=("a same-direction BOS confirms the reversal", "price fails and resumes the old trend"),
-        allowed_setups=(SetupName.LIQUIDITY_SWEEP_RECLAIM,),
+        # This state is, definitionally, "a reversal may be happening" —
+        # exactly what a confirmed double-top/H&S/triangle also claims,
+        # so it's the clearest fit for CHART_PATTERN_REVERSAL.
+        allowed_setups=(SetupName.LIQUIDITY_SWEEP_RECLAIM, SetupName.CHART_PATTERN_REVERSAL),
         risk_modifier=0.75,  # unconfirmed reversal: smaller size until it proves itself
     ),
     MarketState.TREND_DOWN: StateDefinition(
@@ -181,7 +184,7 @@ STATE_DEFINITIONS = {
         state=MarketState.FAILED_BREAKOUT,
         entry_conditions=("a swept level failed to hold beyond it (no displacement, or reclaimed)",),
         exit_conditions=("structure resumes its prior direction", "a genuine reversal confirms instead"),
-        allowed_setups=(SetupName.LIQUIDITY_SWEEP_RECLAIM,),
+        allowed_setups=(SetupName.LIQUIDITY_SWEEP_RECLAIM, SetupName.CHART_PATTERN_REVERSAL),
         risk_modifier=0.5,  # this state exists because the market just faked a move
     ),
     MarketState.HIGH_VOLATILITY: StateDefinition(

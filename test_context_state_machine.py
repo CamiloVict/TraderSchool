@@ -60,6 +60,15 @@ class AllowedSetupNamesTests(unittest.TestCase):
         self.assertEqual(allowed_setup_names(MarketState.NO_TRADE), ())
         self.assertEqual(allowed_setup_names(MarketState.HIGH_VOLATILITY), ())
 
+    def test_chart_pattern_reversal_is_only_allowed_in_reversal_relevant_states(self):
+        # REVERSAL_ATTEMPT and FAILED_BREAKOUT are, definitionally, "a
+        # reversal may be happening" -- the same claim a confirmed chart
+        # pattern makes. A clean trend continuing (TREND_UP) has no use
+        # for a reversal setup.
+        self.assertIn(SetupName.CHART_PATTERN_REVERSAL, allowed_setup_names(MarketState.REVERSAL_ATTEMPT))
+        self.assertIn(SetupName.CHART_PATTERN_REVERSAL, allowed_setup_names(MarketState.FAILED_BREAKOUT))
+        self.assertNotIn(SetupName.CHART_PATTERN_REVERSAL, allowed_setup_names(MarketState.TREND_UP))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -28,10 +28,20 @@ export default function SetupEngineExplainer({
             indicador: son varias condiciones estructurales que tienen que coincidir.
           </li>
           <li>
-            <strong>Entrada:</strong> solo cuando el motor confirma un setup{" "}
-            <code>LIQUIDITY_SWEEP_RECLAIM</code> a favor del sesgo de mayor timeframe — un nivel de
-            liquidez barrido, reclamado, y confirmado por una ruptura de estructura (BOS) en la
-            misma dirección. Un sesgo o un patrón aislado nunca son señal suficiente por sí solos.
+            <strong>Entrada:</strong> solo cuando el motor confirma alguno de estos setups a favor
+            del sesgo de mayor timeframe:
+            <ul>
+              <li>
+                <code>LIQUIDITY_SWEEP_RECLAIM</code> — un nivel de liquidez barrido, reclamado, y
+                confirmado por una ruptura de estructura (BOS) en la misma dirección.
+              </li>
+              <li>
+                <code>CHART_PATTERN_REVERSAL</code> — un patrón de velas clásico (doble techo/piso,
+                hombro-cabeza-hombro, triángulo) recién confirmado, coincidiendo con el sesgo.
+              </li>
+            </ul>
+            Un sesgo o un patrón aislado nunca son señal suficiente por sí solos — siempre hace
+            falta que varias piezas de evidencia coincidan.
           </li>
           <li>
             <strong>Tamaño de la posición:</strong> se calcula para arriesgar como máximo{" "}

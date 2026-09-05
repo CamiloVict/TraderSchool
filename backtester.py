@@ -248,6 +248,7 @@ def export_report(
             "high": float(row["high"]),
             "low": float(row["low"]),
             "close": float(row["close"]),
+            "volume": float(row["volume"]),
             "ema_fast": float(row["ema_fast"]),
             "ema_slow": float(row["ema_slow"]),
             "signal": int(row["signal"]),

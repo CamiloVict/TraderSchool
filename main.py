@@ -34,10 +34,14 @@ Which signal decides entries depends on config.USE_SETUP_ENGINE
     extra exit trigger.
 
   - **True: Setup Engine**, in _run_setup_engine_cycle(). Replaces the
-    EMA signal with context_engine's LIQUIDITY_SWEEP_RECLAIM setup —
-    HTF bias, a swept-and-reclaimed level with displacement, and a
-    confirming break of structure all have to agree (master prompt:
-    "never treat an isolated pattern as a sufficient signal"). Exits
+    EMA signal with context_engine's Setup Engine — currently
+    LIQUIDITY_SWEEP_RECLAIM (HTF bias, a swept-and-reclaimed level with
+    displacement, and a confirming break of structure) or
+    CHART_PATTERN_REVERSAL (a confirmed double-top/bottom,
+    head-and-shoulders, or triangle agreeing with HTF bias) — every
+    setup requires several independent pieces of evidence to agree
+    (master prompt: "never treat an isolated pattern as a sufficient
+    signal"). Exits
     when the bias no longer supports the position or the context calls
     no_trade. The stop-loss order is still placed exactly as before,
     just priced off the setup's structural invalidation level instead

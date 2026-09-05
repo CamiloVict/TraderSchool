@@ -174,7 +174,7 @@ def build_context(
     # A state forbidding a setup (HIGH_VOLATILITY, NO_TRADE) wins even
     # if the setup's own conditions happen to be met, per the decision
     # hierarchy in master prompt section 38 (state outranks setup).
-    setups = detect_setups(structures, liquidity, direction, invalidation, EXECUTION_TIMEFRAME)
+    setups = detect_setups(structures, liquidity, direction, invalidation, EXECUTION_TIMEFRAME, execution)
     permitted = set(allowed_setup_names(final_state))
     setups = [setup for setup in setups if setup.name in permitted]
 

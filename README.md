@@ -187,7 +187,7 @@ red ni el disco:
 | `bias.py` | Bias por timeframe desde estructura + alineación entre timeframes |
 | `regime.py` | Régimen y clasificador de `market_state` (sin memoria — ver `state_machine.py`) |
 | `state_machine.py` | Transiciones acotadas entre estados y registro de qué setups permite/prohíbe cada uno |
-| `setups.py` | Setup Engine: hoy solo `LIQUIDITY_SWEEP_RECLAIM` |
+| `setups.py` | Setup Engine: `LIQUIDITY_SWEEP_RECLAIM` y `CHART_PATTERN_REVERSAL` |
 | `scoring.py` | Score ponderado y versionado, con el desglose de cada componente |
 | `engine.py` | Orquestador: arma el `ContextSnapshot`, las condiciones de no-trade y la invalidación |
 | `llm_interface.py` | Solo el contrato JSON de entrada/salida, sin proveedor |
@@ -259,14 +259,24 @@ Dos campos que conviene leer con atención:
 
 ### Setup Engine y Market State Machine
 
-`preferred_setups` ya no sale siempre vacío. `setups.py` implementa el
-primer (y único, por ahora) setup del master prompt:
-**`LIQUIDITY_SWEEP_RECLAIM`** — bias HTF direccional + un nivel de
-liquidez barrido que se recuperó con desplazamiento + una ruptura de
-estructura (BOS) en el timeframe de ejecución que confirma en la misma
-dirección. Las cuatro condiciones tienen que darse juntas; ninguna por
-sí sola alcanza ("nunca trates un patrón aislado como señal
-suficiente", regla principal del master prompt).
+`preferred_setups` ya no sale siempre vacío. `setups.py` implementa dos
+setups:
+
+- **`LIQUIDITY_SWEEP_RECLAIM`** (sección 43 del master prompt) — bias
+  HTF direccional + un nivel de liquidez barrido que se recuperó con
+  desplazamiento + una ruptura de estructura (BOS) en el timeframe de
+  ejecución que confirma en la misma dirección. Las cuatro condiciones
+  tienen que darse juntas; ninguna por sí sola alcanza.
+- **`CHART_PATTERN_REVERSAL`** — reutiliza el detector de patrones de
+  velas de `patterns.py` (doble techo/piso, HCH/invertido, triángulos),
+  pero solo confirma como setup si el patrón coincide con el bias de
+  mayor timeframe. Un patrón aislado nunca alcanza — es exactamente la
+  misma regla, aplicada al análisis técnico de velas en vez de a
+  liquidez/estructura.
+
+Ninguno de los dos confía en una sola pieza de evidencia ("nunca trates
+un patrón aislado como señal suficiente", regla principal del master
+prompt).
 
 `state_machine.py` construye la máquina de estados de la sección 15:
 `classify_state()` sigue siendo un clasificador sin memoria (mira la
@@ -389,7 +399,7 @@ python -m unittest test_context_validation test_context_structure \
                    test_context_setups test_context_state_machine -v
 ```
 
-O toda la suite del repo (133 tests) con `python -m unittest discover`.
+O toda la suite del repo (151 tests) con `python -m unittest discover`.
 
 ## Dashboard (React)
 
@@ -503,25 +513,28 @@ el resto del dashboard.
   rango, bias multi-timeframe, régimen y score versionado), con CLI
   `python -m context_engine --export ...` y panel en el dashboard
 - [x] `context_engine/state_machine.py` + `setups.py`: transiciones de
-  estado acotadas y el primer Setup Engine (`LIQUIDITY_SWEEP_RECLAIM`),
-  conectados a `preferred_setups`/`setups` del snapshot y, opt-in, al
-  ciclo de trading real en `main.py`
-- [x] `test_context_*.py`: 103 tests del motor de contexto (validación,
+  estado acotadas y el Setup Engine (`LIQUIDITY_SWEEP_RECLAIM` y
+  `CHART_PATTERN_REVERSAL`), conectados a `preferred_setups`/`setups`
+  del snapshot y, opt-in, al ciclo de trading real en `main.py`
+- [x] `test_context_*.py`: 112 tests del motor de contexto (validación,
   estructura, liquidez, engine, setups, state machine), incluido el de
   look-ahead (el contexto en el momento `t` tiene que dar idéntico con o
-  sin las velas posteriores a `t` en la entrada)
+  sin las velas posteriores a `t` en la entrada) y el de
+  `CHART_PATTERN_REVERSAL` (un patrón confirmado contra el bias no
+  alcanza, tiene que coincidir con él)
 - [x] `test_risk_manager.py`: tests del `stop_price` explícito en
   `position_size()` (sizing correcto con un stop más ancho/angosto que
   el fijo, división por cero evitada, funciona también en `short`)
 - [x] `setup_engine_backtester.py`: backtest del ciclo del Setup Engine
   con ventana móvil de contexto (costo lineal, no cuadrático, en la
   cantidad de velas testeadas), reusando `compute_metrics()` de
-  `backtester.py`. `test_setup_engine_backtester.py` (7 tests): la
+  `backtester.py`. `test_setup_engine_backtester.py` (9 tests): la
   ventana nunca crece, `previous_state` viene de la propia iteración
-  anterior, P&L correcto contra un contexto simulado, y un smoke test
+  anterior, P&L correcto contra un contexto simulado, los snapshots
+  llevan OHLC/volumen/equity para el dashboard, y un smoke test
   end-to-end real (más lento, a propósito, para agarrar roturas de
   integración que un mock no vería)
-- [x] 140 tests en total en el repo — `python -m unittest discover`
+- [x] 151 tests en total en el repo — `python -m unittest discover`
 
 ## Decisiones tomadas hasta ahora
 

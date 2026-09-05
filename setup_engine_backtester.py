@@ -170,12 +170,19 @@ def simulate_setup_engine(
     # setup-engine report with the same TradingChart/EquityChart
     # components used for the EMA report, which expect OHLC + equity on
     # every "candle".
+    has_volume = "volume" in history.columns
     for offset, snapshot in enumerate(snapshots):
         row = history.iloc[window + offset]
         snapshot["open"] = float(row["open"])
         snapshot["high"] = float(row["high"])
         snapshot["low"] = float(row["low"])
         snapshot["close"] = float(row["close"])
+        # None (not 0 or 1.0) when the source history has no volume
+        # column at all -- e.g. a cached export that predates volume
+        # being retained (see backtester.py's own export_report). A
+        # fabricated constant would silently misrepresent real data;
+        # None is honest about "we don't know."
+        snapshot["volume"] = float(row["volume"]) if has_volume else None
         snapshot["equity"] = float(equity_curve[offset])
         snapshot["drawdown_pct"] = float(drawdown_pct.iloc[offset])
 

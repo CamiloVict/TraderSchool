@@ -56,11 +56,12 @@ USE_PATTERN_FILTER = os.getenv("USE_PATTERN_FILTER", "false").strip().lower() ==
 
 # --- Setup Engine / Daily Market Context (see context_engine/) ------------
 # Opt-in, off by default: when True, main.py --trade replaces the EMA
-# crossover with context_engine's Setup Engine (currently just
-# LIQUIDITY_SWEEP_RECLAIM) as the only reason to enter — a bias, a
-# swept-and-reclaimed level, and a confirming break of structure all
-# have to agree, per the master prompt this responds to ("never treat
-# an isolated pattern as a sufficient signal"). Off by default because
+# crossover with context_engine's Setup Engine (LIQUIDITY_SWEEP_RECLAIM
+# or CHART_PATTERN_REVERSAL) as the only reason to enter — every setup
+# requires several independent pieces of evidence (bias, structure,
+# liquidity, or a confirmed chart pattern) to agree at once, per the
+# master prompt this responds to ("never treat an isolated pattern as a
+# sufficient signal"). Off by default because
 # it changes what actually places orders, and that has only been
 # exercised in this session's own tests — never against a live
 # Testnet feed. Turn it on deliberately once you've reviewed
