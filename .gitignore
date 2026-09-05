@@ -8,3 +8,8 @@ venv/
 data/*.csv
 data/*.json
 logs/
+
+# Real account activity (trade_journal.py) copied in locally to view in
+# the dashboard -- never commit real trading data, unlike the
+# demo/backtest JSON files that live alongside it in this directory.
+dashboard/public/data/trade_journal.json

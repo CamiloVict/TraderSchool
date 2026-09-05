@@ -182,6 +182,19 @@ forma en vez de aprenderla; un paso natural una vez que haya datos de
 verdad. Igual que las notificaciones, es best-effort: un fallo acá
 queda logueado pero nunca tira abajo el ciclo de trading.
 
+**Para verlo en el dashboard** (panel "Historial real de operaciones",
+siempre visible arriba, independiente del reporte seleccionado): copiá
+el archivo a la carpeta que sirve el dashboard y refrescá.
+
+```bash
+cp data/trade_journal.json dashboard/public/data/trade_journal.json
+```
+
+No se hace automático ni se commitea — son datos reales de tu cuenta,
+a diferencia de los `backtest*.json` de al lado, que sí son demo/backtest
+y están pensados para compartirse. Repetí el `cp` cada vez que quieras
+ver operaciones nuevas.
+
 ### Dead man's switch (`heartbeat.py`, opt-in)
 
 Las notificaciones avisan si un ciclo *falla*; esto avisa si el cron

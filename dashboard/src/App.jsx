@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import EquityChart from "./components/EquityChart";
 import KpiCard from "./components/KpiCard";
+import LiveTradesPanel from "./components/LiveTradesPanel";
 import MarketContext from "./components/MarketContext";
 import SetupEngineExplainer from "./components/SetupEngineExplainer";
 import StrategyExplainer from "./components/StrategyExplainer";
@@ -140,6 +141,7 @@ export default function App() {
       </header>
 
       <MarketContext context={context} />
+      <LiveTradesPanel />
 
       {isSetupEngine ? (
         <SetupEngineExplainer
