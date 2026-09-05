@@ -988,3 +988,11 @@ Dinero real sigue siendo una decisión aparte y deliberada (ver
     medida que se ajustaba). **Decisión: no conectar este bot a
     `main.py --trade` mientras no muestre una ventaja real** — seguir
     afinándolo es un proyecto de tuneo aparte, no algo a apurar.
+  - **El mismo walk-forward con `--take-profit`** (target de zona-premium
+    en vez de solo el stop/señal de rango): -0.85%, -1.99%, -2.84% —
+    **sigue en 0/3 segmentos ganadores**. Mejora el primer tramo
+    (`profit_factor` 0.60 → 0.87) pero no cambia el diagnóstico de
+    fondo: `profit_factor` sigue por debajo de 1 en los tres tramos, o
+    sea que el promedio de operación cerrada sigue perdiendo plata con
+    o sin este take-profit. No es la pieza que le faltaba a esta
+    estrategia.
