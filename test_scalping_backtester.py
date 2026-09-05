@@ -7,23 +7,12 @@ import unittest
 import pandas as pd
 
 from scalping_backtester import _simulate
-from test_scalping_strategy import _oscillation, make_df
+from test_scalping_strategy import _sharp_dip_then_bounce, make_df
 
 
 class SimulateRoundTripTests(unittest.TestCase):
-    def _sharp_dip_df(self):
-        # A single sharp gap down (not a multi-bar grind) so there is
-        # exactly one bar in the discount+oversold zone before recovery
-        # starts -- a sustained multi-bar decline re-fires a fresh entry
-        # on every bar still inside that zone, each one immediately
-        # stopped out as the decline continues, which is real strategy
-        # risk but not what this test isolates.
-        closes = _oscillation(150.0, 30)
-        closes.append(closes[-1] - 15)
-        return closes
-
     def test_signal_exit_when_stop_never_touched(self):
-        closes = self._sharp_dip_df()
+        closes = _sharp_dip_then_bounce()
         for _ in range(25):
             closes.append(closes[-1] + 4)
         df = make_df(closes)
@@ -42,7 +31,7 @@ class SimulateRoundTripTests(unittest.TestCase):
         # below the (buffered) structural stop without moving that
         # candle's close -- so the entry signal itself stays satisfied
         # and only the stop should react.
-        closes = self._sharp_dip_df()
+        closes = _sharp_dip_then_bounce()
         closes.append(closes[-1])  # hold one bar, still in position
         crash_index = len(closes)
         closes.append(closes[-1])  # close unchanged; low overridden below

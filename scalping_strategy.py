@@ -18,15 +18,23 @@ close, nothing later):
     Not a swing high/low or the context_engine's structural ranges --
     just a rolling window, cheap to compute every candle.
   - Only consider trading it if the range is wide enough relative to
-    ATR (`min_range_atr_multiple`): a range narrower than ~1.5x ATR is
+    ATR (`min_range_atr_multiple`): a range narrower than ~2.5x ATR is
     too tight for a round-trip to clear fees + slippage, whatever the
     zone math says.
   - BUY when price is in the bottom `discount_max`% of that range AND
-    RSI confirms oversold -- the zone alone is not enough evidence (see
+    RSI confirms oversold AND the current candle itself closed bullish
+    (close > open) -- the zone/RSI alone is not enough evidence (see
     context_engine.setups's own rule that no single indicator is a
-    sufficient signal by itself).
+    sufficient signal by itself), and specifically not enough to rule
+    out "this is still falling." A backtest against real BTC/USDT (see
+    this repo's history) lost heavily buying oversold dips that kept
+    dipping -- 62% of trades hit their stop -- because RSI-oversold is
+    a *lagging* read of "it fell a lot," not a leading one of "it's
+    about to turn." Requiring the entry candle to have actually closed
+    up is a cheap, real confirmation that a bounce has started, at the
+    cost of a slightly worse entry price than the exact bottom.
   - SELL/EXIT when price reaches the top `premium_min`% of the range.
-    No RSI gate on the exit: getting out of a position is a
+    No confirmation gate on the exit: getting out of a position is a
     risk-reducing action, not a risk-taking one, so it deliberately
     has a lower bar than entering (same asymmetry
     setup_engine_backtester.py's exit rules use).
@@ -50,10 +58,10 @@ from context_engine.features import atr_percent, rsi
 
 LOOKBACK = 20
 RSI_PERIOD = 14
-RSI_OVERSOLD = 35
+RSI_OVERSOLD = 25
 DISCOUNT_MAX = 15.0
 PREMIUM_MIN = 85.0
-MIN_RANGE_ATR_MULTIPLE = 1.5
+MIN_RANGE_ATR_MULTIPLE = 2.5
 
 
 def add_signals(
@@ -64,6 +72,7 @@ def add_signals(
     discount_max: float = DISCOUNT_MAX,
     premium_min: float = PREMIUM_MIN,
     min_range_atr_multiple: float = MIN_RANGE_ATR_MULTIPLE,
+    require_bullish_confirmation: bool = True,
 ) -> pd.DataFrame:
     """Return a copy of `df` (needs 'high', 'low', 'close') with the
     indicator columns and a `signal` column (1 = be long, 0 = be flat).
@@ -87,6 +96,8 @@ def add_signals(
     wide_enough = range_width_pct >= (out["atr_pct"] * min_range_atr_multiple)
 
     entry = wide_enough & (out["range_position_pct"] <= discount_max) & (out["rsi"] <= rsi_oversold)
+    if require_bullish_confirmation:
+        entry = entry & (out["close"] > out["open"])
     exit_ = out["range_position_pct"] >= premium_min
 
     # Stateful, like a live cycle would be: once in, stay in until the

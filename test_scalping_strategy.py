@@ -10,15 +10,22 @@ from scalping_strategy import DISCOUNT_MAX, PREMIUM_MIN, RSI_OVERSOLD, add_signa
 
 
 def make_df(closes: list) -> pd.DataFrame:
-    """5-minute OHLCV DataFrame from a list of close prices. High/low
+    """5-minute OHLCV DataFrame from a list of close prices. Each bar's
+    open is the previous bar's close (real candlestick continuity, and
+    what makes a "bullish candle" -- close > open -- mean something:
+    it's true exactly when this bar rose from the last one). High/low
     are a small fixed offset from close -- wide enough to be a valid
     candle, narrow enough to not itself dominate the ATR/range math."""
     start = pd.Timestamp("2024-01-01", tz="UTC")
     rows = []
     index = []
+    prev_close = closes[0]
     for i, close in enumerate(closes):
-        rows.append({"open": close, "high": close + 0.5, "low": close - 0.5, "close": close, "volume": 1.0})
+        rows.append(
+            {"open": prev_close, "high": max(prev_close, close) + 0.5, "low": min(prev_close, close) - 0.5, "close": close, "volume": 1.0}
+        )
         index.append(start + pd.Timedelta(minutes=5 * i))
+        prev_close = close
     return pd.DataFrame(rows, index=pd.DatetimeIndex(index, name="timestamp"))
 
 
@@ -28,13 +35,23 @@ def _oscillation(base: float, bars: int) -> list:
     return [base + (2 if i % 2 == 0 else -2) for i in range(bars)]
 
 
+def _sharp_dip_then_bounce(base: float = 150.0) -> list:
+    """Oscillation, then a sharp two-bar drop deep enough to make RSI
+    genuinely oversold, then a small bullish bar (still deep in the
+    resulting range's discount zone) that satisfies the confirmation
+    requirement -- the shape add_signals is meant to catch."""
+    closes = _oscillation(base, 30)
+    closes.append(closes[-1] - 20)
+    closes.append(closes[-1] - 20)
+    closes.append(closes[-1] + 1)  # small bounce: the confirmation candle
+    return closes
+
+
 class RoundTripTests(unittest.TestCase):
     def test_enters_at_range_bottom_when_oversold_and_holds_until_premium_zone(self):
-        closes = _oscillation(150.0, 25)
-        for _ in range(15):  # sustained decline -> wide range + oversold RSI
-            closes.append(closes[-1] - 4)
+        closes = _sharp_dip_then_bounce()
         for _ in range(25):  # sustained rise back up through the range
-            closes.append(closes[-1] + 5)
+            closes.append(closes[-1] + 4)
         df = make_df(closes)
 
         out = add_signals(df)
@@ -97,6 +114,29 @@ class FilterTests(unittest.TestCase):
         self.assertTrue(in_discount.any(), "scenario should actually reach the discount zone")
         self.assertTrue((out.loc[in_discount, "rsi"] > RSI_OVERSOLD).all())
         self.assertEqual(out["signal"].sum(), 0)
+
+    def test_no_entry_without_bullish_confirmation_even_if_discount_and_oversold(self):
+        # Same dip as the round-trip scenario, but it keeps falling
+        # instead of bouncing -- discount zone and oversold RSI both
+        # hold on some of these bars, but every one of them is still a
+        # red candle (still falling), so entry must not fire without
+        # the explicit opt-out.
+        closes = _oscillation(150.0, 30)
+        for _ in range(10):
+            closes.append(closes[-1] - 5)
+        df = make_df(closes)
+
+        out = add_signals(df)
+        qualifying = (out["range_position_pct"] <= DISCOUNT_MAX) & (out["rsi"] <= RSI_OVERSOLD)
+        self.assertTrue(qualifying.any(), "scenario should actually reach discount + oversold at some point")
+
+        self.assertEqual(out["signal"].sum(), 0)
+
+        # The same scenario *would* trade once the confirmation
+        # requirement is turned off -- proves the filter, not some
+        # other condition, is what's blocking it above.
+        out_unconfirmed = add_signals(df, require_bullish_confirmation=False)
+        self.assertGreater(out_unconfirmed["signal"].sum(), 0)
 
 
 if __name__ == "__main__":

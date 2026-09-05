@@ -43,7 +43,7 @@ from scalping_strategy import (
 # entry price" are nearly the same level. Pushing the stop this many
 # ATRs further below gives normal noise somewhere to land without
 # invalidating the trade's premise the instant it's opened.
-STOP_BUFFER_ATR_MULTIPLE = 1.0
+STOP_BUFFER_ATR_MULTIPLE = 2.0
 
 
 def _simulate(df: pd.DataFrame, initial_capital: float, stop_buffer_atr_multiple: float = STOP_BUFFER_ATR_MULTIPLE, **strategy_kwargs):
