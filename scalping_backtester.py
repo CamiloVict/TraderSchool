@@ -45,8 +45,24 @@ from scalping_strategy import (
 # invalidating the trade's premise the instant it's opened.
 STOP_BUFFER_ATR_MULTIPLE = 2.0
 
+# The first real backtest (see git history) had a ~57% win rate but an
+# average trade return of essentially zero before fees -- winners and
+# losers were roughly the same size, so the edge was too thin to clear
+# the round-trip fee. Only taking a signal's entry when the potential
+# reward (price to the premium-zone target) is at least this many times
+# the risk (price to the stop) is a direct fix for *that* problem
+# specifically, independent of win rate: even a coin-flip strategy is
+# profitable if winners are reliably bigger than losers.
+MIN_REWARD_RISK_RATIO = 1.5
 
-def _simulate(df: pd.DataFrame, initial_capital: float, stop_buffer_atr_multiple: float = STOP_BUFFER_ATR_MULTIPLE, **strategy_kwargs):
+
+def _simulate(
+    df: pd.DataFrame,
+    initial_capital: float,
+    stop_buffer_atr_multiple: float = STOP_BUFFER_ATR_MULTIPLE,
+    min_reward_risk_ratio: float = MIN_REWARD_RISK_RATIO,
+    **strategy_kwargs,
+):
     """Core simulation loop, shared by run_backtest() and export_report().
     `strategy_kwargs` are passed straight through to
     scalping_strategy.add_signals (lookback, rsi_period, discount_max, ...).
@@ -96,17 +112,28 @@ def _simulate(df: pd.DataFrame, initial_capital: float, stop_buffer_atr_multiple
             position = 0
             stop_price = None
         elif position == 0 and signal == 1:
-            position = 1
-            entry_price = price
-            entry_time = timestamp
-            atr_price = row["atr_pct"] / 100 * entry_price
-            structural_stop = row["range_low"] - atr_price * stop_buffer_atr_multiple
-            stop_price = (
-                float(structural_stop) if structural_stop < entry_price else stop_loss_price(entry_price)
-            )
-            fee = capital * TAKER_FEE_PCT / 100
-            capital -= fee
-            total_fees_paid += fee
+            atr_price = row["atr_pct"] / 100 * price
+            candidate_stop = row["range_low"] - atr_price * stop_buffer_atr_multiple
+            candidate_stop = candidate_stop if candidate_stop < price else stop_loss_price(price)
+
+            premium_min = strategy_kwargs.get("premium_min", PREMIUM_MIN)
+            target_price = row["range_low"] + (premium_min / 100) * (row["range_high"] - row["range_low"])
+
+            risk = price - candidate_stop
+            reward = target_price - price
+            # Signal still says "enter" -- if the reward/risk isn't there
+            # on *this* candle, skip it and re-check on the next one
+            # rather than forcing the trade; the range often keeps
+            # sinking a bit further, which improves this ratio (more
+            # reward, less risk) before the signal itself flips back off.
+            if risk > 0 and reward / risk >= min_reward_risk_ratio:
+                position = 1
+                entry_price = price
+                entry_time = timestamp
+                stop_price = float(candidate_stop)
+                fee = capital * TAKER_FEE_PCT / 100
+                capital -= fee
+                total_fees_paid += fee
         elif position == 1 and signal == 0:
             capital *= price / entry_price
             fee = capital * TAKER_FEE_PCT / 100
@@ -203,6 +230,7 @@ def export_report(
                 f"{strategy_kwargs.get('stop_buffer_atr_multiple', STOP_BUFFER_ATR_MULTIPLE)}x ATR "
                 "(falls back to flat stop_loss_pct if degenerate)"
             ),
+            "min_reward_risk_ratio": strategy_kwargs.get("min_reward_risk_ratio", MIN_REWARD_RISK_RATIO),
         },
         "metrics": metrics,
         "candles": candles,

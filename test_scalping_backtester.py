@@ -47,5 +47,33 @@ class SimulateRoundTripTests(unittest.TestCase):
         self.assertEqual(metrics["stop_loss_exits"], 1)
 
 
+class RewardRiskFilterTests(unittest.TestCase):
+    def test_skips_entry_when_reward_risk_ratio_is_not_met(self):
+        # Same round-trip scenario that trades fine at the default
+        # ratio (see SimulateRoundTripTests) -- demanding a ratio far
+        # above what this setup actually offers must veto it entirely.
+        closes = _sharp_dip_then_bounce()
+        for _ in range(25):
+            closes.append(closes[-1] + 4)
+        df = make_df(closes)
+
+        metrics, _, trades = _simulate(df, initial_capital=1000.0, min_reward_risk_ratio=10.0)
+
+        self.assertEqual(len(trades), 0)
+        self.assertEqual(metrics["num_trades"], 0)
+
+    def test_trades_once_the_ratio_requirement_is_lowered_back(self):
+        # Same scenario, proving the veto above is really about the
+        # ratio and not some other side effect of passing the kwarg.
+        closes = _sharp_dip_then_bounce()
+        for _ in range(25):
+            closes.append(closes[-1] + 4)
+        df = make_df(closes)
+
+        metrics, _, trades = _simulate(df, initial_capital=1000.0, min_reward_risk_ratio=1.5)
+
+        self.assertEqual(len(trades), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
