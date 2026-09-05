@@ -160,9 +160,10 @@ entrada: régimen, bias por timeframe, estructura, liquidez, volatilidad,
 posición dentro del rango, sesión activa, score, y —lo más importante—
 qué tendría que pasar para que esa lectura quede invalidada.
 
-No genera señales ni órdenes. Es la capa de contexto sobre la que
-después se apoyará un Setup Engine; hoy `preferred_setups` sale siempre
-vacío a propósito.
+No genera señales ni órdenes por sí solo. Es la capa de contexto sobre
+la que corre el Setup Engine (ver más abajo) — `preferred_setups` ya no
+sale vacío por default: trae `LIQUIDITY_SWEEP_RECLAIM` y
+`CHART_PATTERN_REVERSAL` cuando confirman.
 
 Pedile bastante historial: los niveles semanales necesitan ~60 velas de
 1w para tener estructura, así que con `--days 120` el timeframe `1w`
@@ -404,7 +405,7 @@ python -m unittest test_context_validation test_context_structure \
                    test_context_setups test_context_state_machine -v
 ```
 
-O toda la suite del repo (164 tests) con `python -m unittest discover`.
+O toda la suite del repo (166 tests) con `python -m unittest discover`.
 
 ## Dashboard (React)
 
@@ -563,7 +564,7 @@ el resto del dashboard.
   `test_trading_cycle.py` (freno de pérdida diaria bloqueando la
   entrada en ambos ciclos, y el `try/except` de `main()` saliendo con
   código de error en vez de propagar la excepción)
-- [x] 164 tests en total en el repo — `python -m unittest discover`
+- [x] 166 tests en total en el repo — `python -m unittest discover`
 
 ## Falta para producción (correr desatendido contra Testnet)
 
@@ -571,10 +572,14 @@ Dinero real es una decisión aparte y deliberada (ver `executor.py`) —
 esto es lo que falta para que el bot corra de forma confiable contra
 **Testnet**, sin nadie mirando cada corrida:
 
-- [ ] **Confirmar que `PAXG/USDT` existe en Binance Spot Testnet.** El
-  testnet suele listar muchos menos pares que el mercado real (donde sí
-  se corrieron los backtests) — si no está, `main.py --trade` falla al
-  conectar con el símbolo default actual.
+- [ ] **Confirmar que `PAXG/USDT` existe en Binance Spot Testnet.**
+  Este entorno no tiene acceso de red para chequearlo (confirmado: el
+  proxy rechaza la conexión a `testnet.binance.vision`) — hay que
+  correr `python main.py` en una máquina con acceso real. Ya no hace
+  falta interpretar un traceback de ccxt para saberlo: el chequeo de
+  conexión ahora valida explícitamente que `SYMBOL` está listado antes
+  de seguir, y si no lo está, lista los mercados con el mismo activo
+  base que sí existen.
 - [ ] **Programar el cron/systemd timer** que invoque
   `main.py --trade` una vez por cierre de vela (hora en punto, para
   `TIMEFRAME=1h`). El código está listo para eso; el timer en sí no

@@ -119,6 +119,23 @@ def check_connection() -> None:
         print(f"Failed to connect / load markets: {exc}")
         sys.exit(1)
 
+    # Explicit and early, not left for the OHLCV fetch below to fail
+    # on: Testnet typically lists far fewer pairs than the real
+    # exchange (where every backtest in this repo actually ran), so
+    # whether config.SYMBOL is tradeable here at all is a real, open
+    # question worth a clear yes/no instead of an ambiguous ccxt
+    # exception further down.
+    if SYMBOL not in markets:
+        near_matches = sorted(m for m in markets if SYMBOL.split("/")[0] in m)
+        print(f"\n{SYMBOL} is NOT listed on this {'Testnet' if USE_TESTNET else 'exchange'}.")
+        if near_matches:
+            print(f"Markets with the same base asset that ARE listed: {near_matches}")
+        else:
+            print(f"No market lists {SYMBOL.split('/')[0]} as a base asset here at all.")
+        print("Set SYMBOL in .env to a listed market before running --trade.")
+        sys.exit(1)
+    print(f"{SYMBOL} is listed and tradeable here.")
+
     print(f"\nFetching last 10 candles for {SYMBOL} ({TIMEFRAME}) ...")
     try:
         candles = fetch_ohlcv(exchange, symbol=SYMBOL, timeframe=TIMEFRAME, limit=10)

@@ -452,6 +452,39 @@ class SetupEngineTradingCycleTests(unittest.TestCase):
         self.assertEqual(stop_orders[0]["triggerPrice"], 9200.0)
 
 
+class CheckConnectionTests(unittest.TestCase):
+    """`python main.py`'s connectivity check — specifically the
+    listed-market guard: Testnet typically carries far fewer pairs than
+    the real exchange this repo's backtests actually ran against, so
+    whether config.SYMBOL is even tradeable here is a real open
+    question this check exists to answer unambiguously instead of
+    leaving it to whatever exception the OHLCV fetch happens to raise."""
+
+    def test_exits_with_a_clear_message_when_symbol_is_not_listed(self):
+        class FakeMarketsExchange:
+            def load_markets(self):
+                return {"BTC/USDT": {}, "ETH/USDT": {}}
+
+        with patch("main.get_exchange", return_value=FakeMarketsExchange()), patch("main.BINANCE_API_KEY", ""):
+            with self.assertRaises(SystemExit) as ctx:
+                main.check_connection()
+
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_proceeds_past_the_guard_when_symbol_is_listed(self):
+        candles = make_candles(10, start_price=4000, step=0)
+
+        class FakeMarketsExchange:
+            def load_markets(self):
+                return {SYMBOL: {}}
+
+            def fetch_ohlcv(self, symbol, timeframe=None, limit=None, since=None):
+                return candles
+
+        with patch("main.get_exchange", return_value=FakeMarketsExchange()), patch("main.BINANCE_API_KEY", ""):
+            main.check_connection()  # must not raise/exit
+
+
 class MainEntrypointTests(unittest.TestCase):
     """`main()`'s --trade dispatch: the refuse-if-not-testnet guard and
     the try/except around run_trading_cycle() that turns an unhandled
