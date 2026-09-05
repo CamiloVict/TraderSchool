@@ -293,13 +293,15 @@ def _run_ema_cycle(exchange) -> dict:
         place_market_order,
         place_stop_loss_order,
     )
-    from risk_manager import position_size, stop_loss_price, structural_stop_price
+    from context_engine.features import atr, last_value
+    from risk_manager import position_size, stop_loss_price, structural_stop_price, validate_stop_distance
 
     df = fetch_ohlcv(exchange, symbol=SYMBOL, timeframe=TIMEFRAME, limit=SLOW_PERIOD * 3)
     data = add_signals(df)
     latest = data.iloc[-1]
     price = float(latest["close"])
     signal = int(latest["signal"])
+    current_atr = last_value(atr(data))
 
     def stop_for(entry_price: float) -> float:
         # Same fallback pattern as the Setup Engine's own structural
@@ -324,6 +326,7 @@ def _run_ema_cycle(exchange) -> dict:
     stop_source = None
     size = None
     size_reject_reason = None
+    stop_distance_reject_reason = None
     daily_loss_pct = None
     weekly_loss_pct = None
     consecutive_losses_count = None
@@ -357,21 +360,26 @@ def _run_ema_cycle(exchange) -> dict:
     ):
         stop_price = stop_for(price)
         stop_source = "structural_swing_low" if USE_STRUCTURAL_STOP else "flat_stop_loss_pct"
-        size = position_size(quote_balance, price, stop_price=stop_price)
-        if size > 0:
-            size_ok, size_reject_reason = meets_exchange_minimums(exchange, SYMBOL, size, price)
-            if size_ok:
-                order = place_market_order(exchange, SYMBOL, "buy", size)
-                action = "buy"
-                entry_price = get_average_fill_price(order) or price
-                filled_amount = float(order.get("filled") or size)
-                # Re-derived off the real average fill price, not the
-                # pre-trade estimate used to size the order above --
-                # same as this cycle already did for the flat-% stop.
-                stop_price = stop_for(entry_price)
-                stop_order = place_stop_loss_order(exchange, SYMBOL, filled_amount, stop_price)
-            else:
-                action = "entry_skipped_below_exchange_minimum"
+        stop_distance_ok, stop_distance_reject_reason = validate_stop_distance(price, stop_price, current_atr)
+        if stop_distance_ok:
+            size = position_size(quote_balance, price, stop_price=stop_price)
+            if size > 0:
+                size_ok, size_reject_reason = meets_exchange_minimums(exchange, SYMBOL, size, price)
+                if size_ok:
+                    order = place_market_order(exchange, SYMBOL, "buy", size)
+                    action = "buy"
+                    entry_price = get_average_fill_price(order) or price
+                    filled_amount = float(order.get("filled") or size)
+                    # Re-derived off the real average fill price, not
+                    # the pre-trade estimate used to size the order
+                    # above -- same as this cycle already did for the
+                    # flat-% stop.
+                    stop_price = stop_for(entry_price)
+                    stop_order = place_stop_loss_order(exchange, SYMBOL, filled_amount, stop_price)
+                else:
+                    action = "entry_skipped_below_exchange_minimum"
+        else:
+            action = "entry_blocked_by_stop_distance"
     elif signal == 1 and not in_position and entry_blocked_by_pattern:
         action = "entry_blocked_by_pattern"
     elif signal == 1 and not in_position and daily_loss_limit_hit:
@@ -415,6 +423,7 @@ def _run_ema_cycle(exchange) -> dict:
             stop_source=stop_source,
             size=size,
             size_reject_reason=size_reject_reason,
+            stop_distance_reject_reason=stop_distance_reject_reason,
             daily_loss_pct=daily_loss_pct,
             weekly_loss_pct=weekly_loss_pct,
             consecutive_losses_count=consecutive_losses_count,
@@ -441,6 +450,7 @@ def _ema_action_reason(
     stop_source,
     size,
     size_reject_reason,
+    stop_distance_reject_reason,
     daily_loss_pct,
     weekly_loss_pct,
     consecutive_losses_count,
@@ -466,6 +476,8 @@ def _ema_action_reason(
         return f"EMA signal is bullish, but the last {consecutive_losses_count} closed trades all lost -- pausing for a win to break the streak"
     if action == "entry_blocked_by_portfolio_risk":
         return "EMA signal is bullish, but the other tracked bot already has a position open and combined risk would exceed MAX_PORTFOLIO_RISK_PCT"
+    if action == "entry_blocked_by_stop_distance":
+        return f"EMA signal is bullish, but the computed stop failed distance validation: {stop_distance_reject_reason}"
     if action == "entry_skipped_below_exchange_minimum":
         return f"EMA signal is bullish and every risk check passed, but the sized position isn't executable: {size_reject_reason}"
     if action == "stop_loss_replaced":
@@ -488,6 +500,7 @@ def _run_setup_engine_cycle(exchange) -> dict:
     import pandas as pd
 
     from context_engine.engine import build_context
+    from context_engine.features import atr, last_value
     from context_engine.schema import Bias, Direction
     from context_engine.timeframes import build_timeframe_set
     from data_fetcher import fetch_ohlcv_history, get_public_data_exchange
@@ -502,7 +515,7 @@ def _run_setup_engine_cycle(exchange) -> dict:
         place_market_order,
         place_stop_loss_order,
     )
-    from risk_manager import position_size, stop_loss_price
+    from risk_manager import position_size, stop_loss_price, validate_stop_distance
 
     context_exchange = get_public_data_exchange()
     since_ms = context_exchange.parse8601(
@@ -536,6 +549,7 @@ def _run_setup_engine_cycle(exchange) -> dict:
 
     context = build_context(frames, asset=SYMBOL, previous_state=previous_state)
     price = float(execution["close"].iloc[-1])
+    current_atr = last_value(atr(execution))
 
     total_balance = get_total_base_asset_balance(exchange, SYMBOL)
     in_position = total_balance * price > 10
@@ -561,6 +575,7 @@ def _run_setup_engine_cycle(exchange) -> dict:
     stop_source = None
     size = None
     size_reject_reason = None
+    stop_distance_reject_reason = None
     daily_loss_pct = None
     weekly_loss_pct = None
     consecutive_losses_count = None
@@ -592,16 +607,20 @@ def _run_setup_engine_cycle(exchange) -> dict:
         if stop_price is None or stop_price >= price:
             stop_price = stop_loss_price(price)  # degenerate level: fall back to the flat %
             stop_source = "flat_stop_loss_pct_fallback"
-        size = position_size(quote_balance, price, stop_price=stop_price)
-        if size > 0:
-            size_ok, size_reject_reason = meets_exchange_minimums(exchange, SYMBOL, size, price)
-            if size_ok:
-                order = place_market_order(exchange, SYMBOL, "buy", size)
-                action = "buy"
-                filled_amount = float(order.get("filled") or size)
-                stop_order = place_stop_loss_order(exchange, SYMBOL, filled_amount, stop_price)
-            else:
-                action = "entry_skipped_below_exchange_minimum"
+        stop_distance_ok, stop_distance_reject_reason = validate_stop_distance(price, stop_price, current_atr)
+        if stop_distance_ok:
+            size = position_size(quote_balance, price, stop_price=stop_price)
+            if size > 0:
+                size_ok, size_reject_reason = meets_exchange_minimums(exchange, SYMBOL, size, price)
+                if size_ok:
+                    order = place_market_order(exchange, SYMBOL, "buy", size)
+                    action = "buy"
+                    filled_amount = float(order.get("filled") or size)
+                    stop_order = place_stop_loss_order(exchange, SYMBOL, filled_amount, stop_price)
+                else:
+                    action = "entry_skipped_below_exchange_minimum"
+        else:
+            action = "entry_blocked_by_stop_distance"
     elif long_setup is not None and not in_position and not context.no_trade and daily_loss_limit_hit:
         action = "entry_blocked_by_daily_loss_limit"
     elif long_setup is not None and not in_position and not context.no_trade and weekly_loss_limit_hit:
@@ -651,6 +670,7 @@ def _run_setup_engine_cycle(exchange) -> dict:
             stop_source=stop_source,
             exit_trigger=exit_trigger,
             size_reject_reason=size_reject_reason,
+            stop_distance_reject_reason=stop_distance_reject_reason,
             daily_loss_pct=daily_loss_pct,
             weekly_loss_pct=weekly_loss_pct,
             consecutive_losses_count=consecutive_losses_count,
@@ -677,6 +697,7 @@ def _setup_engine_action_reason(
     stop_source,
     exit_trigger,
     size_reject_reason,
+    stop_distance_reject_reason,
     daily_loss_pct,
     weekly_loss_pct,
     consecutive_losses_count,
@@ -702,6 +723,8 @@ def _setup_engine_action_reason(
         return f"a confirmed long setup agrees with bias, but the last {consecutive_losses_count} closed trades all lost -- pausing for a win to break the streak"
     if action == "entry_blocked_by_portfolio_risk":
         return "a confirmed long setup agrees with bias, but the other tracked bot already has a position open and combined risk would exceed MAX_PORTFOLIO_RISK_PCT"
+    if action == "entry_blocked_by_stop_distance":
+        return f"a confirmed long setup agrees with bias, but the computed stop failed distance validation: {stop_distance_reject_reason}"
     if action == "entry_skipped_below_exchange_minimum":
         return f"a confirmed long setup agrees with bias and every risk check passed, but the sized position isn't executable: {size_reject_reason}"
     if action == "stop_loss_replaced":

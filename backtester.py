@@ -50,12 +50,10 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
-from config import RISK_PER_TRADE_PCT, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+from config import RISK_PER_TRADE_PCT, STOP_LOSS_PCT, TAKE_PROFIT_PCT, TAKER_FEE_PCT
 from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
 from risk_manager import position_size, stop_loss_price, structural_stop_price, take_profit_price
 from strategy import FAST_PERIOD, SLOW_PERIOD, add_signals
-
-TAKER_FEE_PCT = 0.1  # Binance default spot taker fee, %
 
 
 def _simulate(

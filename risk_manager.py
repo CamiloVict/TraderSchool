@@ -8,6 +8,15 @@ not a fixed % of the position. If capital is $1000 and
 RISK_PER_TRADE_PCT is 1%, a trade should lose at most $10 if the
 stop-loss is hit — the position size is derived backwards from that,
 given how far away (in %) the stop-loss is.
+
+That $10 cap only holds if it counts *everything* the stop-out costs,
+not just the price move: `position_size` also folds in the round-trip
+taker fee (one fill to enter, one to exit), so a stopped-out trade's
+real total loss — price move plus both fees — is what's actually
+bounded to RISK_PER_TRADE_PCT, not just its price component. Before
+this, a stop-out's real loss was quietly RISK_PER_TRADE_PCT + fees,
+understating the very number the whole risk-limit system (daily/weekly
+loss trackers, consecutive-loss halt, portfolio risk) is built around.
 """
 from dataclasses import dataclass, field
 from datetime import date
@@ -16,11 +25,14 @@ import pandas as pd
 
 from config import (
     MAX_DAILY_LOSS_PCT,
+    MAX_STOP_DISTANCE_ATR_MULTIPLE,
     MAX_WEEKLY_LOSS_PCT,
+    MIN_STOP_DISTANCE_ATR_MULTIPLE,
     RISK_PER_TRADE_PCT,
     STOP_LOSS_PCT,
     STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE,
     TAKE_PROFIT_PCT,
+    TAKER_FEE_PCT,
 )
 
 
@@ -29,6 +41,40 @@ def stop_loss_price(entry_price: float, side: str = "long") -> float:
     if side == "long":
         return entry_price * (1 - STOP_LOSS_PCT / 100)
     return entry_price * (1 + STOP_LOSS_PCT / 100)
+
+
+def validate_stop_distance(entry_price: float, stop_price: float, atr: float) -> tuple:
+    """(ok, reason): whether `stop_price` sits within
+    [MIN_STOP_DISTANCE_ATR_MULTIPLE, MAX_STOP_DISTANCE_ATR_MULTIPLE]
+    ATRs of `entry_price`. `reason` is None when `ok` is True.
+
+    Too close: inside normal noise -- the stop would trigger on
+    nothing meaningful, not on the trade's premise actually breaking.
+    Too far: a degenerate level (bad data, a gap, a bug in whatever
+    computed it) or genuinely excessive structural risk for one trade
+    -- position_size() would still cap the $ risk correctly, but a
+    stop this wide is worth rejecting and looking at rather than
+    silently sizing a tiny position around it.
+
+    `atr` of None or <=0 (not enough history to compute one yet) skips
+    validation rather than blocking on missing data -- the same
+    fail-open posture as this repo's other diagnostic-only checks
+    (see portfolio_risk.py).
+    """
+    if atr is None or atr <= 0:
+        return True, None
+    distance_atr = abs(entry_price - stop_price) / atr
+    if distance_atr < MIN_STOP_DISTANCE_ATR_MULTIPLE:
+        return False, (
+            f"stop is {distance_atr:.2f}x ATR from entry, below the "
+            f"{MIN_STOP_DISTANCE_ATR_MULTIPLE}x minimum -- likely inside normal noise"
+        )
+    if distance_atr > MAX_STOP_DISTANCE_ATR_MULTIPLE:
+        return False, (
+            f"stop is {distance_atr:.2f}x ATR from entry, above the "
+            f"{MAX_STOP_DISTANCE_ATR_MULTIPLE}x maximum -- degenerate level or excessive structural risk"
+        )
+    return True, None
 
 
 def structural_stop_price(
@@ -85,13 +131,18 @@ def take_profit_price(entry_price: float, side: str = "long") -> float:
 
 def position_size(capital: float, entry_price: float, side: str = "long", stop_price: float = None) -> float:
     """Position size (in base asset units, e.g. BTC) such that hitting
-    the stop-loss loses exactly RISK_PER_TRADE_PCT of `capital`.
+    the stop-loss loses exactly RISK_PER_TRADE_PCT of `capital`, fees
+    included.
 
-    Example: $1000 capital, 1% risk => willing to lose $10. Stop-loss
-    is STOP_LOSS_PCT=2% away from entry => position value can be
-    $10 / 0.02 = $500, so size = $500 / entry_price. Capped so the
-    position never exceeds the available capital (relevant when
-    STOP_LOSS_PCT is set very tight).
+    Example: $1000 capital, 1% risk => willing to lose $10 total.
+    Stop-loss is STOP_LOSS_PCT=2% away from entry, plus a 0.2%
+    round-trip taker fee (TAKER_FEE_PCT=0.1% each way) => the position
+    value that loses exactly $10 across both is $10 / 0.022 ≈ $454.55,
+    not the $500 a fee-blind calculation would give — sizing without
+    the fee term understates the trade's real worst-case loss by
+    however much the round trip costs. Capped so the position never
+    exceeds the available capital (relevant when STOP_LOSS_PCT is set
+    very tight).
 
     `stop_price`: an explicit stop level (e.g. a Setup Engine's
     structural invalidation) to size against instead of the flat
@@ -109,7 +160,9 @@ def position_size(capital: float, entry_price: float, side: str = "long", stop_p
     if price_risk_pct == 0:
         return 0.0
 
-    position_value = min(risk_amount / price_risk_pct, capital)
+    round_trip_fee_pct = 2 * TAKER_FEE_PCT / 100
+    total_risk_pct = price_risk_pct + round_trip_fee_pct
+    position_value = min(risk_amount / total_risk_pct, capital)
     return position_value / entry_price
 
 

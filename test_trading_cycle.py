@@ -69,13 +69,23 @@ def _stub_disk_touching_side_effects(test_case):
 def make_candles(n: int, start_price: float, step: float):
     """`n` hourly candles, close price moving by `step` each candle —
     enough of a trend that the EMA 20/50 crossover signal is
-    unambiguous on the last row (up for step > 0, down for step < 0)."""
+    unambiguous on the last row (up for step > 0, down for step < 0).
+
+    high/low carry a small wick proportional to `price` (not to
+    `step`), so ATR scales with price the way it would on real
+    candles -- open=high=low=close would make ATR collapse to a flat
+    constant equal to `step`, completely decoupled from price level,
+    which made a stop expressed as a % of price look like tens of ATRs
+    away regardless of how reasonable it actually is (see
+    risk_manager.validate_stop_distance's own tests for the real
+    thing this is standing in for)."""
     start = pd.Timestamp("2024-01-01", tz="UTC")
     rows = []
     for i in range(n):
         ts_ms = int((start + pd.Timedelta(hours=i)).timestamp() * 1000)
         price = start_price + step * i
-        rows.append([ts_ms, price, price, price, price, 1.0])
+        wick = price * 0.002
+        rows.append([ts_ms, price, price + wick, price - wick, price, 1.0])
     return rows
 
 
@@ -114,14 +124,19 @@ def make_losing_streak(n: int):
 
 
 def make_candles_from_closes(closes: list):
-    """Hourly candles from a list of close prices, open/high/low set
-    a small fixed offset from close -- unlike make_candles' flat OHLC,
-    this actually forms real swing highs/lows for structural-stop tests."""
+    """Hourly candles from a list of close prices, open/high/low set a
+    small offset from close, proportional to price (not a fixed 0.5)
+    so ATR scales with price like it would on real candles -- unlike
+    make_candles' flat OHLC, this actually forms real swing highs/lows
+    for structural-stop tests, and the proportional wick keeps that
+    swing ordering intact (it's small next to the price steps that
+    actually create the swings)."""
     start = pd.Timestamp("2024-01-01", tz="UTC")
     rows = []
     for i, close in enumerate(closes):
         ts_ms = int((start + pd.Timedelta(hours=i)).timestamp() * 1000)
-        rows.append([ts_ms, close, close + 0.5, close - 0.5, close, 1.0])
+        wick = close * 0.002
+        rows.append([ts_ms, close, close + wick, close - wick, close, 1.0])
     return rows
 
 
@@ -360,6 +375,9 @@ class EmaAuditFieldsTests(unittest.TestCase):
     the loss-limit/streak value that tripped) an audit needs -- not
     just the bare action string. See main._ema_action_reason()."""
 
+    def setUp(self):
+        _stub_disk_touching_side_effects(self)
+
     def test_buy_reason_reports_the_stop_and_risk_used(self):
         candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
         exchange = FakeExchange(candles, free={"USDT": 1000.0})
@@ -403,6 +421,18 @@ class EmaAuditFieldsTests(unittest.TestCase):
         result = main.run_trading_cycle(FakeExchange(flat_candles, free={"USDT": 1000.0}))
         self.assertEqual(result["action"], "hold")
         self.assertIn("no EMA entry signal", result["reason"])
+
+    def test_stop_distance_block_reason_reports_why_and_skips_sizing(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        with patch("risk_manager.validate_stop_distance", return_value=(False, "stop is 40.00x ATR from entry")):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_blocked_by_stop_distance")
+        self.assertIn("stop is 40.00x ATR from entry", result["reason"])
+        self.assertIsNone(result["size"], "must never size a rejected stop")
+        self.assertEqual(exchange.created_orders, [])
 
     def test_skips_the_entry_when_the_sized_position_is_below_the_exchanges_minimum_notional(self):
         candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
@@ -670,6 +700,17 @@ class SetupEngineTradingCycleTests(unittest.TestCase):
         _stub_disk_touching_side_effects(self)
 
     def _patches(self, snapshot):
+        # Neutralized here, not tested by it: the invalidation levels
+        # these tests pass (9000, 9200, ...) are chosen to be "clearly
+        # below price," not to sit a realistic number of ATRs away from
+        # make_history_df's synthetic candles -- validate_stop_distance
+        # gets its own dedicated, unneutralized test below instead of
+        # every unrelated test here needing a stop distance that
+        # happens to also satisfy it.
+        stop_distance_patch = patch("risk_manager.validate_stop_distance", return_value=(True, None))
+        stop_distance_patch.start()
+        self.addCleanup(stop_distance_patch.stop)
+
         return (
             patch("main.USE_SETUP_ENGINE", True),
             patch("data_fetcher.get_public_data_exchange", return_value=DummyContextExchange()),
@@ -886,6 +927,31 @@ class SetupEngineTradingCycleTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "entry_skipped_below_exchange_minimum")
         self.assertIn("minimum notional", result["reason"])
+        self.assertEqual(exchange.created_orders, [])
+
+    def test_blocks_the_entry_when_stop_distance_validation_fails(self):
+        from context_engine.schema import Direction, Invalidation, Setup, SetupName
+
+        setup = Setup(
+            name=SetupName.LIQUIDITY_SWEEP_RECLAIM,
+            direction=Direction.LONG,
+            reasons=["fake"],
+            invalidation=Invalidation(type="CLOSE_BELOW", level=9000.0, detail="fake"),
+        )
+        snapshot = make_snapshot(setups=[setup], invalidation_level=9000.0)
+        exchange = FakeExchange(make_candles(5, 10000, 0), free={"USDT": 1000.0})
+
+        p1, p2, p3, p4 = self._patches(snapshot)
+        # _patches() neutralizes stop-distance validation by default (see
+        # its own docstring) -- override it back on for this one test,
+        # which is specifically about that wiring.
+        with p1, p2, p3, p4, patch(
+            "risk_manager.validate_stop_distance", return_value=(False, "stop is 63.60x ATR from entry")
+        ):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_blocked_by_stop_distance")
+        self.assertIn("stop is 63.60x ATR from entry", result["reason"])
         self.assertEqual(exchange.created_orders, [])
 
     def test_exit_reason_distinguishes_no_trade_bias_flip_and_bearish_pattern(self):

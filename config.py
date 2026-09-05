@@ -33,8 +33,33 @@ TIMEFRAME = os.getenv("TIMEFRAME", "1h")
 RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "1.0"))
 # % move against entry price that triggers a stop-loss.
 STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "2.0"))
+# Reject an entry if its stop sits fewer than this many ATRs from
+# price -- close enough to be inside normal noise, likely to stop out
+# on nothing meaningful. Deliberately low by default: this is a sanity
+# floor against a degenerate stop, not a strategy-quality knob to tune
+# aggressively without backtesting first.
+MIN_STOP_DISTANCE_ATR_MULTIPLE = float(os.getenv("MIN_STOP_DISTANCE_ATR_MULTIPLE", "0.3"))
+# Reject an entry if its stop sits more than this many ATRs from
+# price -- a stop this wide is either a degenerate level (bad data, a
+# gap, a bug in whatever computed it) or genuinely excessive structural
+# risk for one trade. Deliberately generous by default: a low-volatility
+# asset like PAXG can have an hourly ATR that's a small fraction of a
+# percent of price, while the flat STOP_LOSS_PCT (2% default) doesn't
+# scale down with it -- this is meant as a guard rail against a broken
+# stop, not a strategy-quality filter tuned to second-guess the flat
+# stop's own already-backtested distance. Revisit with real ATR data
+# for whatever SYMBOL/TIMEFRAME you actually run before tightening it.
+MAX_STOP_DISTANCE_ATR_MULTIPLE = float(os.getenv("MAX_STOP_DISTANCE_ATR_MULTIPLE", "15.0"))
 # % move in favor of entry price that triggers a take-profit.
 TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "4.0"))
+# Binance spot taker fee, one side, % -- risk_manager.position_size()
+# folds 2x this (a round trip: one entry fill + one exit fill) into
+# the loss-per-unit at the stop, so RISK_PER_TRADE_PCT is the actual
+# worst-case loss (price move + both fees), not just its price
+# component. Also the single source backtester.py/scalping_backtester.py
+# import their own TAKER_FEE_PCT from, so a live fee change and a
+# backtest fee assumption can't silently drift apart.
+TAKER_FEE_PCT = float(os.getenv("TAKER_FEE_PCT", "0.1"))
 # Daily circuit breaker: stop trading for the day after losing this % of capital.
 MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
 # Weekly circuit breaker: same idea as MAX_DAILY_LOSS_PCT, over the

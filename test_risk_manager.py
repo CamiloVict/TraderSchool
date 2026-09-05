@@ -10,7 +10,13 @@ import unittest
 
 import pandas as pd
 
-from config import MAX_DAILY_LOSS_PCT, MAX_WEEKLY_LOSS_PCT
+from config import (
+    MAX_DAILY_LOSS_PCT,
+    MAX_STOP_DISTANCE_ATR_MULTIPLE,
+    MAX_WEEKLY_LOSS_PCT,
+    MIN_STOP_DISTANCE_ATR_MULTIPLE,
+    TAKER_FEE_PCT,
+)
 from risk_manager import (
     DailyLossTracker,
     WeeklyLossTracker,
@@ -18,6 +24,7 @@ from risk_manager import (
     position_size,
     stop_loss_price,
     structural_stop_price,
+    validate_stop_distance,
 )
 
 
@@ -31,22 +38,37 @@ def make_df(closes: list) -> pd.DataFrame:
     return pd.DataFrame(rows, index=pd.DatetimeIndex(index, name="timestamp"))
 
 
+def _expected_size(capital: float, entry_price: float, stop_price: float) -> float:
+    """Reference implementation of position_size's own formula, fees
+    included, for tests to check against independently of the
+    production code path."""
+    risk_amount = capital * 0.01
+    price_risk_pct = abs(entry_price - stop_price) / entry_price
+    round_trip_fee_pct = 2 * TAKER_FEE_PCT / 100
+    position_value = risk_amount / (price_risk_pct + round_trip_fee_pct)
+    return position_value / entry_price
+
+
 class PositionSizeStopPriceTests(unittest.TestCase):
     def test_defaults_to_the_flat_stop_loss_pct_when_no_stop_price_given(self):
         size = position_size(1000.0, 100.0)
         implied_stop = stop_loss_price(100.0)
-        expected = (1000.0 * 0.01) / (abs(100.0 - implied_stop) / 100.0) / 100.0
+        expected = _expected_size(1000.0, 100.0, implied_stop)
 
         self.assertAlmostEqual(size, expected, places=6)
 
     def test_explicit_stop_price_overrides_the_flat_percentage(self):
-        # A stop twice as far away as the default STOP_LOSS_PCT should
-        # size to roughly half the position for the same risk budget.
-        default_size = position_size(1000.0, 100.0)
+        # A stop twice as far away as the default STOP_LOSS_PCT sizes a
+        # smaller position for the same risk budget -- not exactly
+        # half anymore now that a fixed fee term is folded in
+        # alongside the (now doubled) price-distance term, so check
+        # against the formula directly rather than assuming a ratio.
         far_stop = 100.0 - (100.0 - stop_loss_price(100.0)) * 2
         wide_size = position_size(1000.0, 100.0, stop_price=far_stop)
+        expected = _expected_size(1000.0, 100.0, far_stop)
 
-        self.assertAlmostEqual(wide_size, default_size / 2, places=6)
+        self.assertAlmostEqual(wide_size, expected, places=6)
+        self.assertLess(wide_size, position_size(1000.0, 100.0), "a farther stop must still size smaller")
 
     def test_a_closer_stop_sizes_a_larger_position_for_the_same_risk(self):
         close_stop = 100.0 - (100.0 - stop_loss_price(100.0)) / 2
@@ -61,6 +83,103 @@ class PositionSizeStopPriceTests(unittest.TestCase):
     def test_short_side_still_works_with_an_explicit_stop_above_entry(self):
         size = position_size(1000.0, 100.0, side="short", stop_price=105.0)
         self.assertGreater(size, 0.0)
+
+
+class PositionSizeFeeAwarenessTests(unittest.TestCase):
+    """The actual bug this class exists to pin down: before folding
+    fees into position_size(), a stopped-out trade's real loss was
+    price_risk_pct + round-trip fees, quietly exceeding
+    RISK_PER_TRADE_PCT -- the exact number every other risk limit in
+    this repo (daily/weekly loss, consecutive losses, portfolio risk)
+    assumes is the true worst case per trade."""
+
+    def test_a_stop_out_loses_no_more_than_risk_per_trade_pct_fees_included(self):
+        capital = 1000.0
+        entry_price = 100.0
+        stop_price = stop_loss_price(entry_price)
+        size = position_size(capital, entry_price, stop_price=stop_price)
+
+        entry_fee = size * entry_price * (TAKER_FEE_PCT / 100)
+        exit_fee = size * stop_price * (TAKER_FEE_PCT / 100)
+        price_loss = size * (entry_price - stop_price)
+        total_loss_pct_of_capital = (price_loss + entry_fee + exit_fee) / capital * 100
+
+        # Not exact to the last decimal: position_size() approximates
+        # both fee legs off entry_price (the only price known ahead of
+        # time), while the exit fee here is computed off the slightly
+        # lower stop_price -- a deliberate, second-order-tiny
+        # simplification (a few hundredths of a basis point on a 1%
+        # budget), not the bug this test exists to catch.
+        self.assertAlmostEqual(total_loss_pct_of_capital, 1.0, delta=0.01)
+
+    def test_sizes_smaller_than_a_fee_blind_calculation_would(self):
+        # The bug this test would have caught: a formula that ignores
+        # fees sizes a position whose PRICE loss alone already equals
+        # the full risk budget, before a single cent of fee is paid --
+        # meaning the real loss on a stop-out silently exceeds
+        # RISK_PER_TRADE_PCT by the cost of the round trip.
+        capital = 1000.0
+        entry_price = 100.0
+        stop_price = stop_loss_price(entry_price)
+        size = position_size(capital, entry_price, stop_price=stop_price)
+
+        fee_blind_price_risk_pct = abs(entry_price - stop_price) / entry_price
+        fee_blind_size = min(capital * 0.01 / fee_blind_price_risk_pct, capital) / entry_price
+
+        self.assertLess(size, fee_blind_size)
+
+
+class ValidateStopDistanceTests(unittest.TestCase):
+    def test_ok_when_the_distance_is_within_the_configured_band(self):
+        atr = 1.0
+        mid_multiple = (MIN_STOP_DISTANCE_ATR_MULTIPLE + MAX_STOP_DISTANCE_ATR_MULTIPLE) / 2
+        stop_price = 100.0 - mid_multiple * atr
+
+        ok, reason = validate_stop_distance(100.0, stop_price, atr)
+
+        self.assertTrue(ok)
+        self.assertIsNone(reason)
+
+    def test_rejects_a_stop_closer_than_the_minimum_atr_multiple(self):
+        atr = 1.0
+        too_close = 100.0 - (MIN_STOP_DISTANCE_ATR_MULTIPLE * atr) / 2
+
+        ok, reason = validate_stop_distance(100.0, too_close, atr)
+
+        self.assertFalse(ok)
+        self.assertIn("minimum", reason)
+
+    def test_rejects_a_stop_farther_than_the_maximum_atr_multiple(self):
+        atr = 1.0
+        too_far = 100.0 - (MAX_STOP_DISTANCE_ATR_MULTIPLE * atr) * 2
+
+        ok, reason = validate_stop_distance(100.0, too_far, atr)
+
+        self.assertFalse(ok)
+        self.assertIn("maximum", reason)
+
+    def test_works_the_same_regardless_of_which_side_the_stop_sits_on(self):
+        # Short-side stops sit above entry -- abs() means the check
+        # doesn't care about sign, only magnitude.
+        atr = 1.0
+        too_close = 100.0 + (MIN_STOP_DISTANCE_ATR_MULTIPLE * atr) / 2
+
+        ok, reason = validate_stop_distance(100.0, too_close, atr)
+
+        self.assertFalse(ok)
+
+    def test_skips_validation_when_atr_is_unavailable(self):
+        # Not enough history to compute an ATR yet -- fail open rather
+        # than block a trade over missing diagnostic data.
+        ok, reason = validate_stop_distance(100.0, 50.0, atr=None)
+
+        self.assertTrue(ok)
+        self.assertIsNone(reason)
+
+    def test_skips_validation_when_atr_is_zero_or_negative(self):
+        ok, reason = validate_stop_distance(100.0, 50.0, atr=0.0)
+
+        self.assertTrue(ok)
 
 
 class StructuralStopPriceTests(unittest.TestCase):

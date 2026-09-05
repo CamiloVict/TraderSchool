@@ -813,6 +813,33 @@ Sigue sin haber backend: todo sale de JSON estáticos en
   (ver más abajo), así que el chequeo casi siempre ve balance cero del
   otro activo — construido y testeado igual, listo para el día que BTC
   sí opere en vivo
+- [x] `risk_manager.position_size()` ahora descuenta comisiones: antes
+  solo dimensionaba para que el movimiento de precio hasta el stop
+  perdiera exactamente `RISK_PER_TRADE_PCT` — la pérdida real de una
+  operación que toca el stop también incluye la comisión de entrada y
+  de salida (round-trip), así que la pérdida real venía siendo
+  silenciosamente `RISK_PER_TRADE_PCT` + comisiones, no
+  `RISK_PER_TRADE_PCT` — el número exacto sobre el que están
+  construidos los límites diario/semanal/de rachas/de portafolio.
+  `TAKER_FEE_PCT` ahora vive en `config.py` (antes duplicado como
+  constante local en `backtester.py`) para que el valor usado al
+  dimensionar en vivo y el asumido en los backtests no puedan
+  divergir en silencio
+- [x] `risk_manager.validate_stop_distance()` +
+  `MIN_STOP_DISTANCE_ATR_MULTIPLE`/`MAX_STOP_DISTANCE_ATR_MULTIPLE`:
+  antes de dimensionar, chequea que el stop calculado esté a una
+  distancia razonable en ATRs — muy cerca (`<0.3x` ATR por defecto) y
+  probablemente el stop se dispara con ruido normal, no con la
+  hipótesis del trade realmente invalidándose; muy lejos (`>15x` ATR
+  por defecto) y es más probable que sea un nivel degenerado (un dato
+  malo, un gap, un bug en lo que lo calculó) que riesgo estructural
+  real. Bloquea con `entry_blocked_by_stop_distance` y el motivo
+  exacto. El máximo es deliberadamente generoso — un activo de baja
+  volatilidad como PAXG puede tener un ATR horario que es una fracción
+  chica de 1% del precio, mientras el `STOP_LOSS_PCT` plano (2% por
+  defecto) no se achica junto con él — esto es una barrera de
+  seguridad contra un stop roto, no un filtro de calidad de estrategia
+  pensado para cuestionar la distancia ya probada del stop plano
 - [x] `executor.meets_exchange_minimums()`: `risk_manager.position_size()`
   es matemática de riesgo pura, sin idea de los filtros propios de
   Binance (`LOT_SIZE`/`MIN_NOTIONAL`) — una posición bien dimensionada
