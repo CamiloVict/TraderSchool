@@ -58,8 +58,27 @@ python backtester.py --source real --days 365
 ```
 
 Corre la estrategia de cruce de medias sobre el histórico e imprime:
-retorno total, win rate, drawdown máximo, número de operaciones y
-retorno promedio por operación.
+retorno total, win rate, drawdown máximo, número de operaciones,
+retorno promedio por operación, y las métricas de riesgo/calidad más
+finas que agrega `compute_metrics()` (compartidas por los tres
+backtesters de este repo — EMA, scalping BTC y Setup Engine):
+
+- `sharpe_ratio`/`sortino_ratio`: anualizados sobre la curva de equity
+  completa (candle a candle, incluyendo las velas sin posición abierta),
+  asumiendo 0% de tasa libre de riesgo — la simplificación estándar
+  para un backtest corto de cripto. Con pocas operaciones (como es el
+  caso hoy) son una señal aproximada, no un score preciso.
+- `profit_factor`: ganancia bruta en USD / pérdida bruta en USD entre
+  operaciones cerradas. `None` cuando todas las operaciones cerradas
+  ganaron (no hay pérdida contra la cual dividir — deliberadamente no
+  es `0` ni infinito).
+- `avg_mae_pct`/`avg_mfe_pct`: Max Adverse/Favorable Excursion promedio
+  — cuánto llegó a estar en contra (MAE, `<=0`) y a favor (MFE, `>=0`)
+  cada operación en algún punto de su vida, más allá de en qué precio
+  terminó saliendo. Cada trade individual del reporte (`--export`)
+  también trae su propio `mae_pct`/`mfe_pct`. Es lo que hubiera
+  contestado de entrada la pregunta de si un take-profit del 4% tenía
+  siquiera sentido, sin tener que correr el experimento aparte.
 
 **Usá `--source real`** (Binance real, datos públicos, sin API key, sin
 riesgo — no coloca órdenes) en vez del default `--source testnet`. El
@@ -634,6 +653,10 @@ Sigue sin haber backend: todo sale de JSON estáticos en
   `main.py --trade`) + métricas (retorno vs. buy & hold, win rate,
   drawdown, comisiones, duración de operaciones) y exportación a JSON
   para el dashboard (`--export`)
+- [x] `backtester.compute_metrics()`: Sharpe/Sortino anualizados,
+  profit factor (USD, no %), y MAE/MFE promedio por operación —
+  compartido por los tres backtesters (EMA, scalping BTC, Setup
+  Engine), no reimplementado en cada uno
 - [x] `risk_manager.py`: tamaño de posición por % de riesgo (con stop
   fijo o un `stop_price` estructural explícito), precios de
   stop-loss/take-profit, límite de pérdida diaria (`DailyLossTracker`)

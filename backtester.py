@@ -233,12 +233,71 @@ def _simulate(
     else:
         data["drawdown_pct"] = []
 
-    metrics = compute_metrics(data["close"], data["equity"], data["drawdown_pct"], trades, initial_capital, total_fees_paid)
+    metrics = compute_metrics(
+        data["close"], data["low"], data["high"], data["equity"], data["drawdown_pct"], trades, initial_capital, total_fees_paid
+    )
     return metrics, data, trades
+
+
+def _infer_periods_per_year(index: pd.DatetimeIndex) -> float:
+    """Candle spacing varies by caller (1h for the EMA/Setup Engine
+    backtests, 30m for the BTC scalper) -- infer it from the actual
+    index instead of hardcoding a timeframe, so Sharpe/Sortino
+    annualize correctly whatever candle size produced `equity`."""
+    if len(index) < 2:
+        return 365 * 24.0
+    seconds_per_candle = (index[-1] - index[0]).total_seconds() / (len(index) - 1)
+    if seconds_per_candle <= 0:
+        return 365 * 24.0
+    return (365 * 24 * 3600) / seconds_per_candle
+
+
+def _sharpe_ratio(returns: pd.Series, periods_per_year: float) -> float:
+    """Annualized Sharpe off per-candle equity returns, 0% risk-free
+    rate (the standard simplification for a short crypto backtest).
+    Includes candles spent flat (0% return) same as the equity
+    they're computed from -- honest about the strategy's real
+    per-period volatility, at the cost of being noisy for a strategy
+    that trades as rarely as this one; treat it as a rough signal."""
+    if len(returns) < 2 or returns.std() == 0:
+        return 0.0
+    return float(returns.mean() / returns.std() * np.sqrt(periods_per_year))
+
+
+def _sortino_ratio(returns: pd.Series, periods_per_year: float) -> float:
+    """Same as _sharpe_ratio but penalizing only downside deviation
+    (semi-deviation against a 0% target) -- a strategy with occasional
+    big up-candles and otherwise-flat returns shouldn't be punished
+    for volatility that was never a loss."""
+    if len(returns) < 2:
+        return 0.0
+    downside = returns[returns < 0]
+    if len(downside) == 0:
+        return 0.0  # no losing candle observed -- undefined, not "infinite skill"
+    downside_deviation = np.sqrt((downside**2).mean())
+    if downside_deviation == 0:
+        return 0.0
+    return float(returns.mean() / downside_deviation * np.sqrt(periods_per_year))
+
+
+def _trade_pnl_usd(equity: pd.Series, initial_capital: float, entry_time, exit_time) -> float:
+    """Net $ P&L of one trade (all fees included), read off the
+    already-fee-adjusted equity curve rather than re-deriving it from
+    entry/exit price and size -- avoids duplicating each simulate()
+    loop's own fee bookkeeping here. `entry_loc - 1` is the last candle
+    before the position opened; falls back to initial_capital when the
+    trade opened on the very first tested candle (no earlier candle to
+    read)."""
+    entry_loc = equity.index.get_loc(entry_time)
+    equity_before_entry = float(equity.iloc[entry_loc - 1]) if entry_loc > 0 else initial_capital
+    equity_at_exit = float(equity.loc[exit_time])
+    return equity_at_exit - equity_before_entry
 
 
 def compute_metrics(
     close: pd.Series,
+    low: pd.Series,
+    high: pd.Series,
     equity: pd.Series,
     drawdown_pct: pd.Series,
     trades: list,
@@ -252,6 +311,25 @@ def compute_metrics(
     so it stays correct regardless of what a given strategy calls its
     non-stop-loss exit (EMA cross, bias flip, no_trade, ...) — the
     dashboard only ever reads these two keys, never the raw reasons.
+
+    Also mutates each dict in `trades` in place, adding `mae_pct`/
+    `mfe_pct` (see below) -- cheap to compute here since `low`/`high`
+    and each trade's entry_time/exit_time are already on hand, and it
+    means every backtester gets per-trade excursion data on its trade
+    list for free, not just the aggregate.
+
+    `sharpe_ratio`/`sortino_ratio`: annualized off the full per-candle
+    equity curve (0% risk-free rate) -- see _sharpe_ratio/_sortino_ratio.
+    `profit_factor`: gross $ profit / gross $ loss across closed trades;
+    `None` when every closed trade won (nothing to divide by -- not
+    the same as "0 risk", so this deliberately isn't infinity or 0).
+    `avg_mae_pct`/`avg_mfe_pct`: average Max Adverse/Favorable
+    Excursion -- how far a trade dipped against entry (MAE, <=0) and
+    how far it ran in its favor (MFE, >=0) at any point before exit,
+    whatever it actually exited at. Useful for judging stop/target
+    distance against what trades actually do intra-trade, not just
+    where they ended up (e.g. this is what would have answered "is a
+    4% take-profit even in the right neighborhood" up front).
     """
     if not len(equity):
         return {
@@ -269,6 +347,11 @@ def compute_metrics(
             "signal_exits": 0,
             "avg_trade_duration_hours": 0.0,
             "total_fees_paid": 0.0,
+            "sharpe_ratio": 0.0,
+            "sortino_ratio": 0.0,
+            "profit_factor": 0.0,
+            "avg_mae_pct": 0.0,
+            "avg_mfe_pct": 0.0,
         }
 
     wins = [t for t in trades if t["return_pct"] > 0]
@@ -276,6 +359,36 @@ def compute_metrics(
     durations_hours = [(t["exit_time"] - t["entry_time"]).total_seconds() / 3600 for t in trades]
     buy_hold_return_pct = float(close.iloc[-1] / close.iloc[0] - 1) * 100
     stop_loss_exits = sum(1 for t in trades if t["exit_reason"] == "stop_loss")
+
+    equity_returns = equity.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+    periods_per_year = _infer_periods_per_year(equity.index)
+
+    gross_profit = 0.0
+    gross_loss = 0.0
+    mae_values = []
+    mfe_values = []
+    for t in trades:
+        pnl_usd = _trade_pnl_usd(equity, initial_capital, t["entry_time"], t["exit_time"])
+        if pnl_usd > 0:
+            gross_profit += pnl_usd
+        else:
+            gross_loss += -pnl_usd
+
+        trade_low = low.loc[t["entry_time"]:t["exit_time"]]
+        trade_high = high.loc[t["entry_time"]:t["exit_time"]]
+        mae_pct = min(0.0, float(trade_low.min() / t["entry_price"] - 1) * 100) if len(trade_low) else 0.0
+        mfe_pct = max(0.0, float(trade_high.max() / t["entry_price"] - 1) * 100) if len(trade_high) else 0.0
+        t["mae_pct"] = mae_pct
+        t["mfe_pct"] = mfe_pct
+        mae_values.append(mae_pct)
+        mfe_values.append(mfe_pct)
+
+    if gross_loss > 0:
+        profit_factor = gross_profit / gross_loss
+    elif gross_profit > 0:
+        profit_factor = None  # every closed trade won -- nothing to divide by
+    else:
+        profit_factor = 0.0
 
     return {
         "initial_capital": initial_capital,
@@ -292,6 +405,11 @@ def compute_metrics(
         "signal_exits": len(trades) - stop_loss_exits,
         "avg_trade_duration_hours": float(np.mean(durations_hours)) if durations_hours else 0.0,
         "total_fees_paid": float(total_fees_paid),
+        "sharpe_ratio": _sharpe_ratio(equity_returns, periods_per_year),
+        "sortino_ratio": _sortino_ratio(equity_returns, periods_per_year),
+        "profit_factor": profit_factor,
+        "avg_mae_pct": float(np.mean(mae_values)) if mae_values else 0.0,
+        "avg_mfe_pct": float(np.mean(mfe_values)) if mfe_values else 0.0,
     }
 
 

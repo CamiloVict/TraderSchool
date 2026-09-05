@@ -200,6 +200,8 @@ def simulate_setup_engine(
         )
 
     close = history["close"].iloc[window:]
+    low = history["low"].iloc[window:]
+    high = history["high"].iloc[window:]
     equity = pd.Series(equity_curve, index=tested_index)
     running_max = equity.cummax()
     drawdown_pct = (equity - running_max) / running_max * 100
@@ -228,7 +230,7 @@ def simulate_setup_engine(
         snapshot["equity"] = float(equity_curve[offset])
         snapshot["drawdown_pct"] = float(drawdown_pct.iloc[offset])
 
-    metrics = compute_metrics(close, equity, drawdown_pct, trades, initial_capital, total_fees_paid)
+    metrics = compute_metrics(close, low, high, equity, drawdown_pct, trades, initial_capital, total_fees_paid)
     return metrics, trades, snapshots
 
 

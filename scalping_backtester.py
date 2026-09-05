@@ -176,7 +176,9 @@ def _simulate(
     else:
         data["drawdown_pct"] = []
 
-    metrics = compute_metrics(data["close"], data["equity"], data["drawdown_pct"], trades, initial_capital, total_fees_paid)
+    metrics = compute_metrics(
+        data["close"], data["low"], data["high"], data["equity"], data["drawdown_pct"], trades, initial_capital, total_fees_paid
+    )
     return metrics, data, trades
 
 

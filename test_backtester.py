@@ -202,6 +202,104 @@ class TakeProfitWiringTests(unittest.TestCase):
         self.assertTrue(all(t["exit_reason"] != "take_profit" for t in trades))
 
 
+class TradePnlUsdTests(unittest.TestCase):
+    """Isolated tests for compute_metrics's _trade_pnl_usd helper --
+    reads a trade's net $ P&L (fees included) straight off the
+    already-fee-adjusted equity curve instead of re-deriving it."""
+
+    def test_reads_pnl_as_the_delta_from_the_candle_before_entry(self):
+        index = pd.date_range("2024-01-01", periods=5, freq="h", tz="UTC")
+        equity = pd.Series([1000.0, 1000.0, 950.0, 950.0, 1080.0], index=index)
+
+        pnl = backtester._trade_pnl_usd(equity, 1000.0, index[2], index[4])
+
+        self.assertAlmostEqual(pnl, 1080.0 - 1000.0, places=6)
+
+    def test_falls_back_to_initial_capital_when_the_trade_opens_on_the_first_candle(self):
+        index = pd.date_range("2024-01-01", periods=3, freq="h", tz="UTC")
+        equity = pd.Series([990.0, 990.0, 1050.0], index=index)
+
+        pnl = backtester._trade_pnl_usd(equity, 1000.0, index[0], index[2])
+
+        self.assertAlmostEqual(pnl, 1050.0 - 1000.0, places=6)
+
+
+class ComputeMetricsTests(unittest.TestCase):
+    def test_profit_factor_and_mae_mfe_across_a_win_and_a_loss(self):
+        # 5 candles. Trade A: entry@0, exit@1 (a loss). Trade B: entry@2, exit@4 (a win).
+        index = pd.date_range("2024-01-01", periods=5, freq="h", tz="UTC")
+        equity = pd.Series([1000.0, 970.0, 970.0, 1000.0, 1050.0], index=index)
+        close = pd.Series([100.0, 97.0, 100.0, 103.0, 105.0], index=index)
+        low = pd.Series([100.0, 90.0, 100.0, 100.0, 102.0], index=index)
+        high = pd.Series([100.0, 100.0, 100.0, 104.0, 108.0], index=index)
+        drawdown = pd.Series([0.0, -3.0, -3.0, 0.0, 0.0], index=index)
+        trades = [
+            {
+                "entry_time": index[0], "exit_time": index[1],
+                "entry_price": 100.0, "exit_price": 97.0,
+                "return_pct": -3.0, "exit_reason": "stop_loss",
+            },
+            {
+                "entry_time": index[2], "exit_time": index[4],
+                "entry_price": 100.0, "exit_price": 105.0,
+                "return_pct": 5.0, "exit_reason": "signal",
+            },
+        ]
+
+        metrics = backtester.compute_metrics(close, low, high, equity, drawdown, trades, 1000.0, 0.0)
+
+        # Trade A: equity before entry falls back to initial_capital
+        # (1000, opened on the first candle) -> pnl = 970 - 1000 = -30.
+        # Trade B: equity before entry = candle right before it (970)
+        # -> pnl = 1050 - 970 = +80.
+        self.assertAlmostEqual(metrics["profit_factor"], 80 / 30, places=6)
+        self.assertAlmostEqual(trades[0]["mae_pct"], -10.0, places=6)  # low touched 90 vs. entry 100
+        self.assertEqual(trades[0]["mfe_pct"], 0.0)  # high never exceeded entry
+        self.assertEqual(trades[1]["mae_pct"], 0.0)  # low never dipped below entry
+        self.assertAlmostEqual(trades[1]["mfe_pct"], 8.0, places=6)  # high touched 108 vs. entry 100
+        self.assertAlmostEqual(metrics["avg_mae_pct"], -5.0, places=6)
+        self.assertAlmostEqual(metrics["avg_mfe_pct"], 4.0, places=6)
+
+    def test_profit_factor_is_none_when_every_closed_trade_won(self):
+        warmup = [100.0] * (SLOW_PERIOD + 5)
+        rise = [100.0 + i for i in range(1, 31)]
+        fall = [rise[-1] - i for i in range(1, 31)]
+        df = make_df(warmup + rise + fall)
+
+        metrics, _, trades = _simulate(df, initial_capital=1000.0)
+
+        self.assertEqual(len(trades), 1)
+        self.assertIsNone(metrics["profit_factor"])
+
+    def test_profit_factor_is_zero_when_every_closed_trade_lost(self):
+        warmup = [100.0] * (SLOW_PERIOD + 5)
+        rise = [100.0 + i for i in range(1, 31)]
+        closes = warmup + rise
+        crash_index = len(closes)
+        closes.append(closes[-1])
+        closes += [closes[-1]] * 10
+        low_overrides = {crash_index: closes[crash_index] * 0.5}
+        df = make_df(closes, low_overrides)
+
+        metrics, _, trades = _simulate(df, initial_capital=1000.0)
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(metrics["profit_factor"], 0.0)
+        self.assertLess(trades[0]["mae_pct"], -30.0, "the deep wick should show up as a large adverse excursion")
+
+    def test_sharpe_sortino_and_profit_factor_are_zero_when_nothing_ever_trades(self):
+        df = make_df([100.0] * (SLOW_PERIOD + 10))  # flat: EMA never crosses
+
+        metrics, _, trades = _simulate(df, initial_capital=1000.0)
+
+        self.assertEqual(trades, [])
+        self.assertEqual(metrics["sharpe_ratio"], 0.0)
+        self.assertEqual(metrics["sortino_ratio"], 0.0)
+        self.assertEqual(metrics["profit_factor"], 0.0)
+        self.assertEqual(metrics["avg_mae_pct"], 0.0)
+        self.assertEqual(metrics["avg_mfe_pct"], 0.0)
+
+
 class PatternFilterWiringTests(unittest.TestCase):
     """Verifies _simulate() actually wires the pattern veto into the
     entry check. patterns.py's own detection logic is covered by
