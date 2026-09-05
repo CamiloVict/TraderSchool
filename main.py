@@ -80,10 +80,11 @@ Binance itself rejects the duplicate rather than executing it again.
 Every cycle also syncs Binance's own trade history for SYMBOL into a
 local journal (see trade_journal.py) — the only record of what the
 live bot has actually done that doesn't require reading the exchange's
-own history by hand. Both this and notify() below are best-effort: a
-failure in either is logged but never fails the cycle itself, same
-reasoning as the retry policy above applied to observability instead
-of to the trade logic.
+own history by hand — and records a heartbeat (see heartbeat.py) for
+dead-man's-switch monitoring. All three of this, trade_journal, and
+notify() below are best-effort: a failure in any of them is logged but
+never fails the cycle itself, same reasoning as the retry policy above
+applied to observability instead of to the trade logic.
 """
 import argparse
 import logging
@@ -101,6 +102,7 @@ from config import (
 )
 from daily_loss_state import load_or_init_starting_capital
 from data_fetcher import fetch_ohlcv, get_exchange
+from heartbeat import record_heartbeat
 from notifier import notify
 from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
 from retry import call_with_retries
@@ -204,6 +206,14 @@ def run_trading_cycle(exchange=None) -> dict:
         record_trades(exchange, SYMBOL)
     except Exception:
         logger.warning("Failed to update trade_journal.py's local trade history", exc_info=True)
+    # Reaching this line means the cycle above completed without
+    # raising -- exactly what "the bot is alive" means for the dead
+    # man's switch. Same best-effort posture: a heartbeat hiccup is
+    # never allowed to look like the trading cycle itself failed.
+    try:
+        record_heartbeat()
+    except Exception:
+        logger.warning("Failed to record heartbeat", exc_info=True)
     if result.get("action") not in _SILENT_ACTIONS:
         notify(f"{SYMBOL} {TIMEFRAME}: {result.get('action')} @ {result.get('price')}")
     return result

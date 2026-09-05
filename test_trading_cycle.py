@@ -17,14 +17,15 @@ from config import SYMBOL
 
 
 def _stub_disk_touching_side_effects(test_case):
-    """run_trading_cycle() has two side effects that persist to real
-    files under data/ (daily_loss_state.json, trade_journal.json) so
-    they survive across main.py --trade's separate cron-invoked
-    processes -- exactly what a test run must NOT do, since one test's
-    values would otherwise leak into the next as a stale baseline or a
-    lingering trade record. Both have their own dedicated tests
-    (test_daily_loss_state.py, test_trade_journal.py); every test here
-    just needs them out of the way."""
+    """run_trading_cycle() has side effects that persist to real files
+    under data/ (daily_loss_state.json, trade_journal.json,
+    heartbeat.json) so they survive across main.py --trade's separate
+    cron-invoked processes -- exactly what a test run must NOT do,
+    since one test's values would otherwise leak into the next as a
+    stale baseline or a lingering record. Each has its own dedicated
+    tests (test_daily_loss_state.py, test_trade_journal.py,
+    test_heartbeat.py); every test here just needs them out of the way.
+    """
     loss_patcher = patch("main.load_or_init_starting_capital", side_effect=lambda equity, **_: equity)
     loss_patcher.start()
     test_case.addCleanup(loss_patcher.stop)
@@ -32,6 +33,10 @@ def _stub_disk_touching_side_effects(test_case):
     journal_patcher = patch("main.record_trades")
     journal_patcher.start()
     test_case.addCleanup(journal_patcher.stop)
+
+    heartbeat_patcher = patch("main.record_heartbeat")
+    heartbeat_patcher.start()
+    test_case.addCleanup(heartbeat_patcher.stop)
 
 
 def make_candles(n: int, start_price: float, step: float):
@@ -261,6 +266,25 @@ class NotifyWiringTests(unittest.TestCase):
         exchange = FakeExchange(candles, free={"USDT": 1000.0})
 
         with patch("main.record_trades", side_effect=RuntimeError("disk full")):
+            result = main.run_trading_cycle(exchange)  # must not raise
+
+        self.assertEqual(result["action"], "buy")
+
+    def test_records_a_heartbeat_every_cycle_including_a_hold(self):
+        candles = make_candles(200, start_price=10000, step=0)  # flat -> hold
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        with patch("main.record_heartbeat") as mock_heartbeat:
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "hold")
+        mock_heartbeat.assert_called_once_with()
+
+    def test_a_broken_heartbeat_does_not_fail_the_cycle(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        with patch("main.record_heartbeat", side_effect=RuntimeError("disk full")):
             result = main.run_trading_cycle(exchange)  # must not raise
 
         self.assertEqual(result["action"], "buy")

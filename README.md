@@ -34,6 +34,13 @@ versión sana (3.10+), podés usarlo sin más.
 1. Entra a https://testnet.binance.vision/, loguéate con GitHub y genera
    una API key (HMAC_SHA256).
 2. Copia `BINANCE_API_KEY` y `BINANCE_API_SECRET` en tu `.env`.
+
+   **Si en algún momento generás una key contra Binance real (no
+   Testnet)**, creála con permiso de **spot trading únicamente** —
+   nunca habilites retiros (withdrawal). Este bot no los necesita para
+   nada, y una key sin ese permiso limita el daño posible de una fuga a
+   "puede operar con tu capital", no a "puede vaciar la cuenta". Es
+   una casilla en la propia UI de Binance al crear la key.
 3. Verifica la conexión:
 
 ```bash
@@ -174,6 +181,30 @@ sin operaciones reales contra las cuales validarla sería adivinar la
 forma en vez de aprenderla; un paso natural una vez que haya datos de
 verdad. Igual que las notificaciones, es best-effort: un fallo acá
 queda logueado pero nunca tira abajo el ciclo de trading.
+
+### Dead man's switch (`heartbeat.py`, opt-in)
+
+Las notificaciones avisan si un ciclo *falla*; esto avisa si el cron
+*dejó de correr*. Son problemas distintos: si el cron se desconfiguró
+o el servidor se apagó, no hay ningún ciclo fallando — simplemente no
+hay ciclos, y sin ciclos tampoco hay notificaciones. Silencio total en
+vez de alerta.
+
+`heartbeat.py` escribe `data/heartbeat.json` con la hora de la última
+corrida exitosa en cada ciclo — útil para chequear a mano
+(`cat data/heartbeat.json`), pero **no alcanza como dead man's switch
+real**: un chequeo que corre en la misma máquina que lo que está
+vigilando se apaga junto con ella, así que nunca puede notar su propio
+silencio. Para eso hace falta algo externo:
+
+```bash
+# Un servicio gratis como https://healthchecks.io o https://cronitor.io,
+# configurado ahí (fuera de esta máquina) para esperar un ping al menos
+# cada ~1.5x el intervalo de --trade, y avisarte si no llega.
+HEARTBEAT_PING_URL=https://hc-ping.com/tu-uuid-aca
+```
+
+Vacío por default — sin configurar nada, solo queda el archivo local.
 
 ## Filtro de patrones de chart (`patterns.py`, opt-in)
 
@@ -490,7 +521,7 @@ python -m unittest test_context_validation test_context_structure \
                    test_context_setups test_context_state_machine -v
 ```
 
-O toda la suite del repo (203 tests) con `python -m unittest discover`.
+O toda la suite del repo (212 tests) con `python -m unittest discover`.
 
 ## Dashboard (React)
 
@@ -610,6 +641,10 @@ el resto del dashboard.
   de Binance a `data/trade_journal.json` en cada ciclo, deduplicado por
   id — el track record real del bot, no solo el de los backtests.
   Best-effort igual que `notifier.py`
+- [x] `heartbeat.py`: archivo local + ping opcional a un servicio
+  externo (healthchecks.io/cronitor) en cada ciclo exitoso — el ping
+  externo es lo único que puede notar que el cron dejó de correr del
+  todo, ya que un chequeo en la misma máquina se apaga junto con ella
 - [x] `executor.py`: órdenes de mercado y stop-loss real
   (`STOP_LOSS_LIMIT`) en Testnet, bloqueadas si `USE_TESTNET` es `False`
 - [x] `dashboard/`: panel React (Vite) con gráfico de velas real
@@ -685,7 +720,10 @@ el resto del dashboard.
   incluso cuando `fetch_my_trades` devuelve historial solapado (su
   comportamiento real), orden por timestamp, y que un fallo del
   journal nunca tira abajo el ciclo de trading
-- [x] 203 tests en total en el repo — `python -m unittest discover`
+- [x] `test_heartbeat.py` (7 tests): mismo patrón que `test_notifier.py`
+  — un fallo del ping nunca propaga ni loguea la URL secreta, y un
+  error de escritura local sí propaga (no hay secreto que proteger ahí)
+- [x] 212 tests en total en el repo — `python -m unittest discover`
 - [x] `.github/workflows/tests.yml`: la suite corre sola en cada push y
   PR, contra Python 3.9 y 3.12 — 3.9 específicamente para volver a
   agarrar la regresión de sintaxis `X | None` que ya rompió una vez en

@@ -87,3 +87,13 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # both {"text": ...} and {"content": ...} so either works without this
 # needing to know which service it's pointed at.
 ALERT_WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL", "")
+
+# --- Dead man's switch (see heartbeat.py) -----------------------------------
+# Opt-in, off by default: a free external service like
+# https://healthchecks.io or https://cronitor.io that main.py --trade
+# pings after every cycle that completes without raising. Configure the
+# expected-ping interval on the service itself (outside this machine) —
+# that's what actually lets it notice when --trade has stopped running
+# altogether (cron died, the server is down), which nothing running on
+# this same machine could ever detect about itself.
+HEARTBEAT_PING_URL = os.getenv("HEARTBEAT_PING_URL", "")
