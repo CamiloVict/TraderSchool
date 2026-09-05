@@ -33,7 +33,7 @@ import pandas as pd
 
 from config import RISK_PER_TRADE_PCT, STOP_LOSS_PCT, TAKE_PROFIT_PCT
 from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
-from risk_manager import stop_loss_price
+from risk_manager import position_size, stop_loss_price
 from strategy import FAST_PERIOD, SLOW_PERIOD, add_signals
 
 TAKER_FEE_PCT = 0.1  # Binance default spot taker fee, %
@@ -74,11 +74,12 @@ def _simulate(
         data["pattern_signal"] = 0
         entry_blocked = pd.Series(False, index=data.index)
 
-    capital = initial_capital
+    capital = initial_capital  # total account value (cash + any open position, at cost)
     position = 0  # 0 = flat, 1 = long
     entry_price = 0.0
     entry_time = None
     stop_price = None
+    size = 0.0  # base-asset units held while in position
     trades = []
     equity_curve = []
     total_fees_paid = 0.0
@@ -93,9 +94,9 @@ def _simulate(
             # have filled near the stop, before we'd even see this
             # candle's close or its EMA-crossover signal.
             exit_price = stop_price
-            capital *= exit_price / entry_price
-            fee = capital * TAKER_FEE_PCT / 100
-            capital -= fee
+            proceeds = size * exit_price
+            fee = proceeds * TAKER_FEE_PCT / 100
+            capital = capital - (size * entry_price) + proceeds - fee
             total_fees_paid += fee
             trades.append(
                 {
@@ -110,18 +111,32 @@ def _simulate(
             )
             position = 0
             stop_price = None
+            size = 0.0
         elif position == 0 and signal == 1 and not entry_blocked.loc[timestamp]:
-            position = 1
-            entry_price = price
-            entry_time = timestamp
-            stop_price = stop_loss_price(entry_price)
-            fee = capital * TAKER_FEE_PCT / 100
-            capital -= fee
-            total_fees_paid += fee
+            candidate_stop = stop_loss_price(price)
+            # Same sizing main.py --trade actually places live: risking
+            # RISK_PER_TRADE_PCT of capital against this stop distance,
+            # not "all-in" on every signal. Deliberately not the whole
+            # `capital` -- a backtest that assumes full exposure every
+            # trade overstates both the return AND the risk the live
+            # bot actually takes. Same zero-size guard as main.py's own
+            # `if size > 0:` -- a degenerate size (e.g. capital already
+            # wiped out) means no order would actually be placed live.
+            candidate_size = position_size(capital, price, stop_price=candidate_stop)
+            if candidate_size > 0:
+                position = 1
+                entry_price = price
+                entry_time = timestamp
+                stop_price = candidate_stop
+                size = candidate_size
+                cost = size * entry_price
+                fee = cost * TAKER_FEE_PCT / 100
+                capital -= fee
+                total_fees_paid += fee
         elif position == 1 and signal == 0:
-            capital *= price / entry_price
-            fee = capital * TAKER_FEE_PCT / 100
-            capital -= fee
+            proceeds = size * price
+            fee = proceeds * TAKER_FEE_PCT / 100
+            capital = capital - (size * entry_price) + proceeds - fee
             total_fees_paid += fee
             trades.append(
                 {
@@ -136,8 +151,12 @@ def _simulate(
             )
             position = 0
             stop_price = None
+            size = 0.0
 
-        equity_curve.append(capital * (price / entry_price) if position == 1 else capital)
+        if position == 1:
+            equity_curve.append(capital - (size * entry_price) + (size * price))
+        else:
+            equity_curve.append(capital)
 
     data["equity"] = equity_curve
     if len(data):

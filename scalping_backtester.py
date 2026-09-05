@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from backtester import TAKER_FEE_PCT, compute_metrics
-from risk_manager import stop_loss_price
+from risk_manager import position_size, stop_loss_price
 from scalping_strategy import (
     DISCOUNT_MAX,
     LOOKBACK,
@@ -78,11 +78,12 @@ def _simulate(
     warmup = max(lookback, rsi_period)
     data = data.iloc[warmup:].copy()
 
-    capital = initial_capital
+    capital = initial_capital  # total account value (cash + any open position, at cost)
     position = 0  # 0 = flat, 1 = long
     entry_price = 0.0
     entry_time = None
     stop_price = None
+    size = 0.0  # base-asset units held while in position
     trades = []
     equity_curve = []
     total_fees_paid = 0.0
@@ -94,9 +95,9 @@ def _simulate(
 
         if position == 1 and stop_price is not None and low <= stop_price:
             exit_price = stop_price
-            capital *= exit_price / entry_price
-            fee = capital * TAKER_FEE_PCT / 100
-            capital -= fee
+            proceeds = size * exit_price
+            fee = proceeds * TAKER_FEE_PCT / 100
+            capital = capital - (size * entry_price) + proceeds - fee
             total_fees_paid += fee
             trades.append(
                 {
@@ -111,6 +112,7 @@ def _simulate(
             )
             position = 0
             stop_price = None
+            size = 0.0
         elif position == 0 and signal == 1:
             atr_price = row["atr_pct"] / 100 * price
             candidate_stop = row["range_low"] - atr_price * stop_buffer_atr_multiple
@@ -126,18 +128,26 @@ def _simulate(
             # rather than forcing the trade; the range often keeps
             # sinking a bit further, which improves this ratio (more
             # reward, less risk) before the signal itself flips back off.
-            if risk > 0 and reward / risk >= min_reward_risk_ratio:
+            # Sized the same way main.py --trade would place it live:
+            # risking RISK_PER_TRADE_PCT of capital against this stop,
+            # not the whole account -- see backtester.py's own fix for
+            # why "100% of capital every trade" overstates both return
+            # and risk.
+            candidate_size = position_size(capital, price, stop_price=candidate_stop)
+            if risk > 0 and reward / risk >= min_reward_risk_ratio and candidate_size > 0:
                 position = 1
                 entry_price = price
                 entry_time = timestamp
                 stop_price = float(candidate_stop)
-                fee = capital * TAKER_FEE_PCT / 100
+                size = candidate_size
+                cost = size * entry_price
+                fee = cost * TAKER_FEE_PCT / 100
                 capital -= fee
                 total_fees_paid += fee
         elif position == 1 and signal == 0:
-            capital *= price / entry_price
-            fee = capital * TAKER_FEE_PCT / 100
-            capital -= fee
+            proceeds = size * price
+            fee = proceeds * TAKER_FEE_PCT / 100
+            capital = capital - (size * entry_price) + proceeds - fee
             total_fees_paid += fee
             trades.append(
                 {
@@ -152,8 +162,12 @@ def _simulate(
             )
             position = 0
             stop_price = None
+            size = 0.0
 
-        equity_curve.append(capital * (price / entry_price) if position == 1 else capital)
+        if position == 1:
+            equity_curve.append(capital - (size * entry_price) + (size * price))
+        else:
+            equity_curve.append(capital)
 
     data["equity"] = equity_curve
     if len(data):
