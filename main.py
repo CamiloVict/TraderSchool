@@ -98,6 +98,7 @@ from config import (
     TIMEFRAME,
     USE_PATTERN_FILTER,
     USE_SETUP_ENGINE,
+    USE_STRUCTURAL_STOP,
     USE_TESTNET,
 )
 from balance_snapshot import record_balance
@@ -240,13 +241,21 @@ def _run_ema_cycle(exchange) -> dict:
         place_market_order,
         place_stop_loss_order,
     )
-    from risk_manager import position_size, stop_loss_price
+    from risk_manager import position_size, stop_loss_price, structural_stop_price
 
     df = fetch_ohlcv(exchange, symbol=SYMBOL, timeframe=TIMEFRAME, limit=SLOW_PERIOD * 3)
     data = add_signals(df)
     latest = data.iloc[-1]
     price = float(latest["close"])
     signal = int(latest["signal"])
+
+    def stop_for(entry_price: float) -> float:
+        # Same fallback pattern as the Setup Engine's own structural
+        # stop: structural_stop_price already falls back to the flat %
+        # on its own when there's no usable swing yet.
+        if USE_STRUCTURAL_STOP:
+            return structural_stop_price(data, entry_price)
+        return stop_loss_price(entry_price)
 
     # Total (free + locked) balance: an open stop-loss order locks the
     # coins it covers out of the *free* balance, so checking only free
@@ -272,14 +281,17 @@ def _run_ema_cycle(exchange) -> dict:
         daily_loss_limit_hit = _daily_loss_limit_hit(quote_balance + total_balance * price)
 
     if signal == 1 and not in_position and not entry_blocked_by_pattern and not daily_loss_limit_hit:
-        size = position_size(quote_balance, price)
+        size = position_size(quote_balance, price, stop_price=stop_for(price))
         if size > 0:
             order = place_market_order(exchange, SYMBOL, "buy", size)
             action = "buy"
             entry_price = get_average_fill_price(order) or price
             filled_amount = float(order.get("filled") or size)
+            # Re-derived off the real average fill price, not the
+            # pre-trade estimate used to size the order above -- same
+            # as this cycle already did for the flat-% stop.
             stop_order = place_stop_loss_order(
-                exchange, SYMBOL, filled_amount, stop_loss_price(entry_price)
+                exchange, SYMBOL, filled_amount, stop_for(entry_price)
             )
     elif signal == 1 and not in_position and entry_blocked_by_pattern:
         action = "entry_blocked_by_pattern"
@@ -301,7 +313,7 @@ def _run_ema_cycle(exchange) -> dict:
         # position isn't left unprotected until the next EMA exit.
         entry_price = get_last_fill_price(exchange, SYMBOL, "buy") or price
         stop_order = place_stop_loss_order(
-            exchange, SYMBOL, total_balance, stop_loss_price(entry_price)
+            exchange, SYMBOL, total_balance, stop_for(entry_price)
         )
         action = "stop_loss_replaced"
 

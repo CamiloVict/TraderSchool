@@ -14,6 +14,7 @@ import pandas as pd
 import main
 import risk_manager
 from config import SYMBOL
+from strategy import SLOW_PERIOD
 
 
 def _stub_disk_touching_side_effects(test_case):
@@ -54,6 +55,18 @@ def make_candles(n: int, start_price: float, step: float):
         ts_ms = int((start + pd.Timedelta(hours=i)).timestamp() * 1000)
         price = start_price + step * i
         rows.append([ts_ms, price, price, price, price, 1.0])
+    return rows
+
+
+def make_candles_from_closes(closes: list):
+    """Hourly candles from a list of close prices, open/high/low set
+    a small fixed offset from close -- unlike make_candles' flat OHLC,
+    this actually forms real swing highs/lows for structural-stop tests."""
+    start = pd.Timestamp("2024-01-01", tz="UTC")
+    rows = []
+    for i, close in enumerate(closes):
+        ts_ms = int((start + pd.Timedelta(hours=i)).timestamp() * 1000)
+        rows.append([ts_ms, close, close + 0.5, close - 0.5, close, 1.0])
     return rows
 
 
@@ -140,6 +153,27 @@ class RunTradingCycleTests(unittest.TestCase):
         entry_price = buy_orders[0]["average"]
         expected_stop = risk_manager.stop_loss_price(entry_price)
         self.assertAlmostEqual(stop_orders[0]["triggerPrice"], expected_stop, places=6)
+
+    def test_uses_the_structural_stop_when_enabled(self):
+        # A real dip (forms a confirmed swing low around 9950) then a
+        # rise past the old high -> EMA crossover entry. With
+        # USE_STRUCTURAL_STOP on, the placed stop should come from that
+        # swing low (risk_manager.structural_stop_price), not the flat %.
+        warmup = [10000.0] * (SLOW_PERIOD + 5)
+        dip = [10000.0 - i * 10 for i in range(1, 6)]  # down to 9950
+        rise = [dip[-1] + i * 10 for i in range(1, 31)]  # back up and beyond
+        candles = make_candles_from_closes(warmup + dip + rise)
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        with patch("main.USE_STRUCTURAL_STOP", True):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "buy")
+        stop_orders = [o for o in exchange.created_orders if o["side"] == "sell"]
+        self.assertEqual(len(stop_orders), 1)
+        entry_price = [o for o in exchange.created_orders if o["side"] == "buy"][0]["average"]
+        flat_stop = risk_manager.stop_loss_price(entry_price)
+        self.assertNotAlmostEqual(stop_orders[0]["triggerPrice"], flat_stop, places=2)
 
     def test_exit_signal_cancels_stale_stop_before_selling(self):
         candles = make_candles(200, start_price=10000, step=-10)  # downtrend -> signal 0

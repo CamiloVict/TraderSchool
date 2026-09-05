@@ -87,14 +87,22 @@ simplemente lo que la cuenta testnet tiene en ese momento).
 
 Cada compra coloca de inmediato una orden `STOP_LOSS_LIMIT` real en el
 exchange (`executor.place_stop_loss_order`), al precio de
-`risk_manager.stop_loss_price()`. La posición se cierra por lo que
-ocurra primero: el stop-loss se dispara, o la EMA rápida vuelve a
-cruzar por debajo — en ese segundo caso, el ciclo cancela el stop antes
-de vender por mercado, porque el stop deja el balance "locked" (no
-disponible para otra orden). Si un ciclo encuentra una posición abierta
-sin stop-loss vigente (por ejemplo, el proceso se cortó justo después
-de comprar), lo reconstruye a partir del último fill de compra en vez
-de dejar la posición desprotegida hasta el próximo cruce.
+`risk_manager.stop_loss_price()` (un % fijo) o, con
+`USE_STRUCTURAL_STOP=true`, de `risk_manager.structural_stop_price()`
+— el último swing low confirmado (`context_engine.structure`, la misma
+pieza que ya usa el stop del Setup Engine), con un colchón de
+`STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE` ATRs, y caída al % fijo si no hay
+un swing usable todavía. Opt-in y apagado por defecto, como
+`USE_PATTERN_FILTER`/`USE_SETUP_ENGINE`: probalo con
+`backtester.py --structural-stop` antes de prenderlo en el cron. La
+posición se cierra por lo que ocurra primero: el stop-loss se dispara,
+o la EMA rápida vuelve a cruzar por debajo — en ese segundo caso, el
+ciclo cancela el stop antes de vender por mercado, porque el stop deja
+el balance "locked" (no disponible para otra orden). Si un ciclo
+encuentra una posición abierta sin stop-loss vigente (por ejemplo, el
+proceso se cortó justo después de comprar), lo reconstruye a partir del
+último fill de compra en vez de dejar la posición desprotegida hasta el
+próximo cruce.
 
 **Nunca coloca órdenes si `BINANCE_TESTNET` no es `true`** — `executor.py`
 lo verifica antes de cada orden y lanza `LiveTradingDisabledError` si no.

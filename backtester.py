@@ -24,6 +24,11 @@ Assumptions (deliberate simplifications, worth knowing about):
     bottom, head-and-shoulders/inverse, triangles): a confirmed
     bearish pattern blocks a new EMA-crossover entry for a while. Off
     by default — it's an opt-in experiment, not a validated edge.
+  - `use_structural_stop=True` (config.USE_STRUCTURAL_STOP) swaps the
+    flat STOP_LOSS_PCT stop for risk_manager.structural_stop_price()
+    (last confirmed swing low, from context_engine.structure) — the
+    same building block the Setup Engine's own stop already uses. Off
+    by default for the same reason the pattern filter is.
 """
 import json
 from datetime import datetime, timezone
@@ -33,7 +38,7 @@ import pandas as pd
 
 from config import RISK_PER_TRADE_PCT, STOP_LOSS_PCT, TAKE_PROFIT_PCT
 from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
-from risk_manager import position_size, stop_loss_price
+from risk_manager import position_size, stop_loss_price, structural_stop_price
 from strategy import FAST_PERIOD, SLOW_PERIOD, add_signals
 
 TAKER_FEE_PCT = 0.1  # Binance default spot taker fee, %
@@ -45,6 +50,7 @@ def _simulate(
     fast: int = None,
     slow: int = None,
     use_pattern_filter: bool = False,
+    use_structural_stop: bool = False,
 ):
     """Core simulation loop, shared by run_backtest() and export_report().
 
@@ -53,6 +59,17 @@ def _simulate(
     head-and-shoulders, descending/symmetric triangle) blocks new
     EMA-crossover entries for PATTERN_VETO_LOOKBACK candles. It only
     gates entries; exits (signal or stop-loss) are unaffected.
+
+    `use_structural_stop`: see this module's own docstring. When
+    computing it, only `data.loc[:timestamp]` (history up to and
+    including the current candle) is ever passed to
+    structural_stop_price() -- never the full `data` -- so a swing
+    that only exists because of candles still in the bot's future
+    can never back-date into today's stop (context_engine.structure's
+    own look-ahead discipline only protects `analyze_structure`'s
+    swing/break outputs; naively passing it the whole series would
+    still leak the *current* price level through `classify_phase`'s
+    unguarded `df["close"].iloc[-1]`).
 
     Returns (metrics: dict, data: DataFrame with equity/drawdown columns
     added, trades: list of per-trade dicts).
@@ -113,7 +130,10 @@ def _simulate(
             stop_price = None
             size = 0.0
         elif position == 0 and signal == 1 and not entry_blocked.loc[timestamp]:
-            candidate_stop = stop_loss_price(price)
+            if use_structural_stop:
+                candidate_stop = structural_stop_price(data.loc[:timestamp], price)
+            else:
+                candidate_stop = stop_loss_price(price)
             # Same sizing main.py --trade actually places live: risking
             # RISK_PER_TRADE_PCT of capital against this stop distance,
             # not "all-in" on every signal. Deliberately not the whole
@@ -233,13 +253,14 @@ def run_backtest(
     fast: int = None,
     slow: int = None,
     use_pattern_filter: bool = False,
+    use_structural_stop: bool = False,
 ) -> dict:
     """Simulate the EMA-crossover strategy over `df` and return metrics.
 
     `df` must have a 'close' column indexed by time (as returned by
     data_fetcher.fetch_ohlcv / fetch_ohlcv_history).
     """
-    metrics, _, _ = _simulate(df, initial_capital, fast, slow, use_pattern_filter)
+    metrics, _, _ = _simulate(df, initial_capital, fast, slow, use_pattern_filter, use_structural_stop)
     return metrics
 
 
@@ -253,12 +274,13 @@ def export_report(
     timeframe: str = None,
     is_demo: bool = False,
     use_pattern_filter: bool = False,
+    use_structural_stop: bool = False,
 ) -> dict:
     """Run the backtest and write a JSON report the React dashboard reads:
     metrics, per-candle OHLC/EMA/signal/equity, and the trade list.
     Returns the same dict that's written to disk.
     """
-    metrics, data, trades = _simulate(df, initial_capital, fast, slow, use_pattern_filter)
+    metrics, data, trades = _simulate(df, initial_capital, fast, slow, use_pattern_filter, use_structural_stop)
 
     candles = [
         {
@@ -296,6 +318,7 @@ def export_report(
             "take_profit_simulated": False,
             "pattern_filter_enabled": use_pattern_filter,
             "pattern_veto_lookback_candles": PATTERN_VETO_LOOKBACK if use_pattern_filter else None,
+            "stop_priced_off": "structural (last swing low, ATR-buffered)" if use_structural_stop else "flat stop_loss_pct",
         },
         "metrics": metrics,
         "candles": candles,
@@ -353,6 +376,15 @@ if __name__ == "__main__":
             "double-top, head-and-shoulders, or triangle confirms. Off by default."
         ),
     )
+    parser.add_argument(
+        "--structural-stop",
+        action="store_true",
+        help=(
+            "Opt-in structural stop (config.USE_STRUCTURAL_STOP): the last "
+            "confirmed swing low (context_engine.structure), ATR-buffered, "
+            "instead of the flat STOP_LOSS_PCT. Off by default."
+        ),
+    )
     args = parser.parse_args()
 
     exchange = get_public_data_exchange() if args.source == "real" else get_exchange()
@@ -370,11 +402,12 @@ if __name__ == "__main__":
             symbol=SYMBOL,
             timeframe=TIMEFRAME,
             use_pattern_filter=args.pattern_filter,
+            use_structural_stop=args.structural_stop,
         )
         metrics = report["metrics"]
         print(f"Report written to {args.export}")
     else:
-        metrics = run_backtest(history, use_pattern_filter=args.pattern_filter)
+        metrics = run_backtest(history, use_pattern_filter=args.pattern_filter, use_structural_stop=args.structural_stop)
 
     for key, value in metrics.items():
         print(f"{key}: {value:.2f}" if isinstance(value, float) else f"{key}: {value}")

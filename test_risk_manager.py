@@ -1,12 +1,25 @@
 """Tests for risk_manager.position_size's stop_price override — the
 piece the Setup Engine path in main.py needs to size against a
-structural invalidation level instead of the flat STOP_LOSS_PCT.
+structural invalidation level instead of the flat STOP_LOSS_PCT — and
+for structural_stop_price's own swing-based stop derivation.
 
 Run with: python -m unittest test_risk_manager -v
 """
 import unittest
 
-from risk_manager import position_size, stop_loss_price
+import pandas as pd
+
+from risk_manager import position_size, stop_loss_price, structural_stop_price
+
+
+def make_df(closes: list) -> pd.DataFrame:
+    start = pd.Timestamp("2024-01-01", tz="UTC")
+    rows = []
+    index = []
+    for i, close in enumerate(closes):
+        rows.append({"open": close, "high": close + 1, "low": close - 1, "close": close, "volume": 1.0})
+        index.append(start + pd.Timedelta(hours=i))
+    return pd.DataFrame(rows, index=pd.DatetimeIndex(index, name="timestamp"))
 
 
 class PositionSizeStopPriceTests(unittest.TestCase):
@@ -39,6 +52,44 @@ class PositionSizeStopPriceTests(unittest.TestCase):
     def test_short_side_still_works_with_an_explicit_stop_above_entry(self):
         size = position_size(1000.0, 100.0, side="short", stop_price=105.0)
         self.assertGreater(size, 0.0)
+
+
+class StructuralStopPriceTests(unittest.TestCase):
+    def test_long_stop_sits_below_the_last_confirmed_swing_low(self):
+        # A clear dip-then-recover: the low at index 3 (close=100, so
+        # low=99) is a confirmed swing low (2 higher lows on each side,
+        # the default SWING_LEFT/SWING_RIGHT=2).
+        df = make_df([110, 108, 105, 100, 103, 106, 109, 112, 115, 118, 120])
+
+        stop = structural_stop_price(df, entry_price=120.0)
+
+        self.assertLess(stop, 99.0, "stop should sit below the swing low, not on top of it")
+        self.assertLess(stop, stop_loss_price(120.0), "the swing low here is much further than the flat %")
+
+    def test_falls_back_to_flat_pct_when_there_is_not_enough_history_for_a_swing(self):
+        df = make_df([110, 108, 105])  # fewer candles than SWING_LEFT+SWING_RIGHT+1 needs
+
+        stop = structural_stop_price(df, entry_price=105.0)
+
+        self.assertAlmostEqual(stop, stop_loss_price(105.0), places=6)
+
+    def test_falls_back_to_flat_pct_when_the_swing_is_degenerate(self):
+        # A swing low sitting above the entry price (e.g. price already
+        # broke below it) would put the stop on the wrong side of the
+        # trade -- must fall back rather than produce a nonsensical stop.
+        df = make_df([90, 92, 95, 100, 97, 94, 91, 88, 85, 82, 80])
+        entry_price = 80.0  # below every swing low in this series
+
+        stop = structural_stop_price(df, entry_price=entry_price)
+
+        self.assertAlmostEqual(stop, stop_loss_price(entry_price), places=6)
+
+    def test_short_side_uses_the_last_confirmed_swing_high(self):
+        df = make_df([90, 92, 95, 100, 97, 94, 100, 105, 108, 105, 102])
+
+        stop = structural_stop_price(df, entry_price=90.0, side="short")
+
+        self.assertGreater(stop, 100.0, "stop should sit above the swing high, not on top of it")
 
 
 if __name__ == "__main__":

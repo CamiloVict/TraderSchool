@@ -42,6 +42,20 @@ MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
 # unfilled above the market once triggered.
 STOP_LOSS_LIMIT_SLIPPAGE_PCT = float(os.getenv("STOP_LOSS_LIMIT_SLIPPAGE_PCT", "0.5"))
 
+# Opt-in, off by default: when True, the EMA-crossover cycle's stop is
+# risk_manager.structural_stop_price() (last confirmed swing low/high,
+# from context_engine.structure -- the same building block the Setup
+# Engine's own stop already uses) instead of the flat STOP_LOSS_PCT.
+# Off by default for the same reason USE_SETUP_ENGINE/USE_PATTERN_FILTER
+# are: it changes what actually protects a live order, so turn it on
+# deliberately once you've backtested it, not as a side effect of
+# upgrading.
+USE_STRUCTURAL_STOP = os.getenv("USE_STRUCTURAL_STOP", "false").strip().lower() == "true"
+# How many ATRs beyond the swing level the stop sits, so it isn't
+# resting exactly on the level that invalidates the trade (see
+# risk_manager.structural_stop_price's own docstring).
+STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE = float(os.getenv("STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE", "0.2"))
+
 # --- Chart-pattern confirmation filter (see patterns.py) -------------------
 # Opt-in, off by default: when True, a newly-confirmed bearish reversal
 # pattern (double-top, head-and-shoulders, triangle) blocks new

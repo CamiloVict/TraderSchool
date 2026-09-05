@@ -14,8 +14,8 @@ import pandas as pd
 import backtester
 from backtester import _simulate
 from config import RISK_PER_TRADE_PCT, STOP_LOSS_PCT
-from risk_manager import stop_loss_price
-from strategy import SLOW_PERIOD
+from risk_manager import stop_loss_price, structural_stop_price
+from strategy import add_signals, SLOW_PERIOD
 
 
 def make_df(closes: list, low_overrides: dict = None) -> pd.DataFrame:
@@ -66,6 +66,54 @@ class SimulateStopLossTests(unittest.TestCase):
         self.assertGreaterEqual(len(trades), 1)
         self.assertTrue(all(t["exit_reason"] == "signal" for t in trades))
         self.assertEqual(metrics["stop_loss_exits"], 0)
+
+
+class StructuralStopWiringTests(unittest.TestCase):
+    def _dip_rise_deep_dip_scenario(self):
+        """Warmup, a moderate dip (forms a swing low around 95), a rise
+        that triggers an EMA-crossover entry, THEN (after entry) a much
+        deeper dip down to ~45 -- a swing low that doesn't exist yet at
+        entry time. If structural_stop_price ever saw the full series
+        instead of history-up-to-entry, the entry's stop would come out
+        near 44 instead of near 94."""
+        warmup = [100.0] * (SLOW_PERIOD + 5)
+        dip = [100 - i for i in range(1, 6)]
+        rise = [95 + i for i in range(1, 31)]
+        deep_dip_after = [125 - i * 8 for i in range(1, 11)]
+        recover = [45 + i * 3 for i in range(1, 21)]
+        fall = [recover[-1] - i for i in range(1, 31)]
+        closes = warmup + dip + rise + deep_dip_after + recover + fall
+
+        start = pd.Timestamp("2024-01-01", tz="UTC")
+        rows = [{"open": c, "high": c + 0.5, "low": c - 0.5, "close": c, "volume": 1.0} for c in closes]
+        index = [start + pd.Timedelta(hours=i) for i in range(len(closes))]
+        return pd.DataFrame(rows, index=pd.DatetimeIndex(index, name="timestamp"))
+
+    def test_structural_stop_differs_from_the_flat_percentage(self):
+        df = self._dip_rise_deep_dip_scenario()
+
+        metrics, _, trades = _simulate(df, initial_capital=1000.0, use_structural_stop=True)
+
+        self.assertGreaterEqual(len(trades), 1)
+        first_entry_price = trades[0]["entry_price"]
+        self.assertNotAlmostEqual(trades[0]["stop_loss_price"], stop_loss_price(first_entry_price), places=2)
+
+    def test_structural_stop_never_leaks_a_future_swing_low(self):
+        df = self._dip_rise_deep_dip_scenario()
+        data = add_signals(df)
+        entry_ts = data.index[data["signal"].diff() == 1][0]
+        entry_price = float(data.loc[entry_ts, "close"])
+
+        # The swing low genuinely differs depending on how much of the
+        # series is visible -- proves this scenario actually exercises
+        # the look-ahead guard, not just that some number matches.
+        correct_stop = structural_stop_price(data.loc[:entry_ts], entry_price)
+        leaked_stop = structural_stop_price(data, entry_price)
+        self.assertLess(leaked_stop, correct_stop - 10, "the future deep dip should look like a much lower stop")
+
+        _, _, trades = _simulate(df, initial_capital=1000.0, use_structural_stop=True)
+
+        self.assertAlmostEqual(trades[0]["stop_loss_price"], correct_stop, places=6)
 
 
 class PositionSizingTests(unittest.TestCase):

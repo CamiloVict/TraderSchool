@@ -12,7 +12,15 @@ given how far away (in %) the stop-loss is.
 from dataclasses import dataclass, field
 from datetime import date
 
-from config import MAX_DAILY_LOSS_PCT, RISK_PER_TRADE_PCT, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+import pandas as pd
+
+from config import (
+    MAX_DAILY_LOSS_PCT,
+    RISK_PER_TRADE_PCT,
+    STOP_LOSS_PCT,
+    STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE,
+    TAKE_PROFIT_PCT,
+)
 
 
 def stop_loss_price(entry_price: float, side: str = "long") -> float:
@@ -20,6 +28,51 @@ def stop_loss_price(entry_price: float, side: str = "long") -> float:
     if side == "long":
         return entry_price * (1 - STOP_LOSS_PCT / 100)
     return entry_price * (1 + STOP_LOSS_PCT / 100)
+
+
+def structural_stop_price(
+    df: pd.DataFrame,
+    entry_price: float,
+    side: str = "long",
+    atr_buffer_multiple: float = STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE,
+) -> float:
+    """Stop derived from where the trade's own premise breaks, not a
+    flat %: the most recent confirmed swing against `df` (the last
+    swing low for a long, the last swing high for a short), pushed
+    `atr_buffer_multiple` ATRs further out so the stop has room to
+    breathe instead of resting exactly on the level that invalidates
+    the trade -- same idea context_engine's own Invalidation.level
+    already uses as the Setup Engine's stop (see main.py, config
+    USE_STRUCTURAL_STOP).
+
+    Falls back to the flat stop_loss_price() when there isn't a usable
+    swing yet (not enough history) or the swing is already on the
+    wrong side of entry_price (degenerate) -- the exact fallback
+    pattern already used everywhere else a structural level backs a
+    stop in this repo.
+
+    `df` only needs to be one timeframe's OHLC history (whatever the
+    caller already has for its own signal) -- context_engine.structure
+    is a pure, single-timeframe function with no dependency on the
+    rest of that engine's multi-timeframe machinery, so this does not
+    require build_context()'s much heavier history fetch.
+    """
+    from context_engine.features import atr, last_value
+    from context_engine.structure import analyze_structure
+
+    structure = analyze_structure(df)
+    swing_level = structure.last_swing_low if side == "long" else structure.last_swing_high
+    if swing_level is None:
+        return stop_loss_price(entry_price, side)
+
+    buffer = (last_value(atr(df)) or 0.0) * atr_buffer_multiple
+
+    if side == "long":
+        candidate = swing_level - buffer
+        return candidate if candidate < entry_price else stop_loss_price(entry_price, side)
+
+    candidate = swing_level + buffer
+    return candidate if candidate > entry_price else stop_loss_price(entry_price, side)
 
 
 def take_profit_price(entry_price: float, side: str = "long") -> float:
