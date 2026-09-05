@@ -50,8 +50,25 @@ Which signal decides entries depends on config.USE_SETUP_ENGINE
     just priced off the setup's structural invalidation level instead
     of a flat STOP_LOSS_PCT. Long-only, like the rest of this bot — a
     SHORT setup is detected but never acted on.
+
+Both cycles refuse new entries once today's (UTC) realized loss hits
+MAX_DAILY_LOSS_PCT (action "entry_blocked_by_daily_loss_limit") — see
+_daily_loss_limit_hit() and daily_loss_state.py for why that needs its
+own tiny persisted file on top of risk_manager.DailyLossTracker, given
+--trade's one-process-per-cron-tick invocation model above. It only
+blocks new entries; an existing position still exits through its own
+normal rules.
+
+`--trade` logs to both the console and a rotating logs/trading.log
+(see _configure_logging()) instead of printing, and wraps the whole
+cycle in a try/except that logs any exception with its traceback before
+exiting non-zero — the only way cron/systemd (nobody watching stdout
+live) can tell a run actually failed instead of it just silently going
+missing from the schedule.
 """
 import argparse
+import logging
+import os
 import sys
 
 from config import (
@@ -63,9 +80,32 @@ from config import (
     USE_SETUP_ENGINE,
     USE_TESTNET,
 )
+from daily_loss_state import load_or_init_starting_capital
 from data_fetcher import fetch_ohlcv, get_exchange
 from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
+from risk_manager import DailyLossTracker
 from strategy import SLOW_PERIOD, add_signals
+
+logger = logging.getLogger("trading_bot")
+
+
+def _daily_loss_limit_hit(current_equity: float) -> bool:
+    """True if today's (UTC) realized loss already meets or exceeds
+    MAX_DAILY_LOSS_PCT — new entries should be skipped for the rest of
+    the day. Does not force-close an existing position; that still
+    exits through its own normal rules (stop-loss/signal/bias/no_trade).
+
+    A fresh DailyLossTracker is built every call because the class
+    itself is in-memory only (see its docstring) and this function may
+    run in a brand-new process each time (main.py --trade, invoked once
+    per cron tick) — daily_loss_state.py is what makes "today's
+    starting equity" survive between those runs so the comparison below
+    is still meaningful.
+    """
+    starting_capital = load_or_init_starting_capital(current_equity)
+    tracker = DailyLossTracker(starting_capital=starting_capital)
+    tracker.record_trade_pnl(current_equity - starting_capital)
+    return not tracker.trading_allowed()
 
 
 def check_connection() -> None:
@@ -147,14 +187,17 @@ def _run_ema_cycle(exchange) -> dict:
     stop_order = None
 
     entry_blocked_by_pattern = False
-    if USE_PATTERN_FILTER and signal == 1 and not in_position:
-        pattern_signal = detect_reversal_patterns(data)
-        entry_blocked_by_pattern = bool(
-            bearish_veto_mask(pattern_signal, PATTERN_VETO_LOOKBACK).iloc[-1]
-        )
-
-    if signal == 1 and not in_position and not entry_blocked_by_pattern:
+    daily_loss_limit_hit = False
+    if signal == 1 and not in_position:
+        if USE_PATTERN_FILTER:
+            pattern_signal = detect_reversal_patterns(data)
+            entry_blocked_by_pattern = bool(
+                bearish_veto_mask(pattern_signal, PATTERN_VETO_LOOKBACK).iloc[-1]
+            )
         quote_balance = get_quote_asset_balance(exchange, SYMBOL)
+        daily_loss_limit_hit = _daily_loss_limit_hit(quote_balance + total_balance * price)
+
+    if signal == 1 and not in_position and not entry_blocked_by_pattern and not daily_loss_limit_hit:
         size = position_size(quote_balance, price)
         if size > 0:
             order = place_market_order(exchange, SYMBOL, "buy", size)
@@ -166,6 +209,8 @@ def _run_ema_cycle(exchange) -> dict:
             )
     elif signal == 1 and not in_position and entry_blocked_by_pattern:
         action = "entry_blocked_by_pattern"
+    elif signal == 1 and not in_position and daily_loss_limit_hit:
+        action = "entry_blocked_by_daily_loss_limit"
     elif signal == 0 and in_position:
         # Cancel the protective stop first so it doesn't compete with
         # this market sell for the same (currently locked) balance.
@@ -195,7 +240,7 @@ def _run_ema_cycle(exchange) -> dict:
         "order_id": order.get("id") if order else None,
         "stop_order_id": stop_order.get("id") if stop_order else None,
     }
-    print(result)
+    logger.info(result)
     return result
 
 
@@ -244,7 +289,7 @@ def _run_setup_engine_cycle(exchange) -> dict:
             "order_id": None,
             "stop_order_id": None,
         }
-        print(result)
+        logger.info(result)
         return result
 
     # Stateless by design (matching the rest of this bot): rather than
@@ -280,8 +325,12 @@ def _run_setup_engine_cycle(exchange) -> dict:
     order = None
     stop_order = None
 
+    daily_loss_limit_hit = False
     if long_setup is not None and not in_position and not context.no_trade:
         quote_balance = get_quote_asset_balance(exchange, SYMBOL)
+        daily_loss_limit_hit = _daily_loss_limit_hit(quote_balance + total_balance * price)
+
+    if long_setup is not None and not in_position and not context.no_trade and not daily_loss_limit_hit:
         stop_reference = long_setup.invalidation.level
         if stop_reference is None or stop_reference >= price:
             stop_reference = stop_loss_price(price)  # degenerate level: fall back to the flat %
@@ -291,6 +340,8 @@ def _run_setup_engine_cycle(exchange) -> dict:
             action = "buy"
             filled_amount = float(order.get("filled") or size)
             stop_order = place_stop_loss_order(exchange, SYMBOL, filled_amount, stop_reference)
+    elif long_setup is not None and not in_position and not context.no_trade and daily_loss_limit_hit:
+        action = "entry_blocked_by_daily_loss_limit"
     elif in_position and (context.no_trade or not bullish_bias or bearish_pattern):
         # The bias that justified this position is gone, context says
         # not to trade at all right now, or a bearish pattern just
@@ -322,8 +373,32 @@ def _run_setup_engine_cycle(exchange) -> dict:
         "order_id": order.get("id") if order else None,
         "stop_order_id": stop_order.get("id") if stop_order else None,
     }
-    print(result)
+    logger.info(result)
     return result
+
+
+def _configure_logging() -> None:
+    """Console + a small rotating log file (logs/trading.log).
+
+    Only called from main() — importing this module (as every test in
+    this repo does) must never create a logs/ directory or file as a
+    side effect. A rotating file, not a plain one, because --trade runs
+    unattended via cron/systemd (see the module docstring): nobody is
+    there to notice or truncate an ever-growing log.
+    """
+    from logging.handlers import RotatingFileHandler
+
+    os.makedirs("logs", exist_ok=True)
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+
+    file_handler = RotatingFileHandler("logs/trading.log", maxBytes=1_000_000, backupCount=5)
+    file_handler.setFormatter(formatter)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+
+    logger.setLevel(logging.INFO)
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
 
 
 def main() -> None:
@@ -336,10 +411,19 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.trade:
+        _configure_logging()
         if not USE_TESTNET:
-            print("BINANCE_TESTNET is not 'true' — refusing to trade. See executor.py.")
+            logger.error("BINANCE_TESTNET is not 'true' — refusing to trade. See executor.py.")
             sys.exit(1)
-        run_trading_cycle()
+        # Cron/systemd only surfaces a failure through the exit code (no
+        # one is watching stdout live) — log the full traceback to the
+        # persistent file *before* it, so a bad run is debuggable after
+        # the fact instead of just silently missing from the schedule.
+        try:
+            run_trading_cycle()
+        except Exception:
+            logger.exception("Trading cycle failed")
+            sys.exit(1)
     else:
         check_connection()
 

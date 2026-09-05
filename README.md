@@ -404,7 +404,7 @@ python -m unittest test_context_validation test_context_structure \
                    test_context_setups test_context_state_machine -v
 ```
 
-O toda la suite del repo (154 tests) con `python -m unittest discover`.
+O toda la suite del repo (164 tests) con `python -m unittest discover`.
 
 ## Dashboard (React)
 
@@ -488,6 +488,21 @@ el resto del dashboard.
 - [x] `risk_manager.py`: tamaño de posición por % de riesgo (con stop
   fijo o un `stop_price` estructural explícito), precios de
   stop-loss/take-profit, límite de pérdida diaria (`DailyLossTracker`)
+  — conectado a `main.py --trade` (ver siguiente punto), no solo
+  implementado
+- [x] `daily_loss_state.py`: persiste la equity de arranque del día
+  (UTC) en `data/daily_loss_state.json` para que `DailyLossTracker`
+  (en memoria por diseño) funcione de verdad bajo el modelo de
+  invocación de `--trade` — un proceso nuevo por cada corrida de cron,
+  no uno de larga vida. Ambos ciclos (EMA y Setup Engine) bloquean
+  nuevas entradas (`entry_blocked_by_daily_loss_limit`) apenas la
+  pérdida realizada del día llega a `MAX_DAILY_LOSS_PCT`; una posición
+  ya abierta sigue saliendo por sus reglas normales
+- [x] `main.py --trade`: loggea a consola y a `logs/trading.log`
+  (rotado) en vez de `print()`, y envuelve el ciclo completo en un
+  `try/except` que deja el traceback en el log antes de salir con
+  código de error — sin esto, un cron sin nadie mirando stdout en vivo
+  no tiene forma de notar que una corrida falló
 - [x] `executor.py`: órdenes de mercado y stop-loss real
   (`STOP_LOSS_LIMIT`) en Testnet, bloqueadas si `USE_TESTNET` es `False`
 - [x] `dashboard/`: panel React (Vite) con gráfico de velas real
@@ -544,7 +559,30 @@ el resto del dashboard.
   OHLC/volumen/equity para el dashboard, y un smoke test end-to-end
   real (más lento, a propósito, para agarrar roturas de integración que
   un mock no vería)
-- [x] 154 tests en total en el repo — `python -m unittest discover`
+- [x] `test_daily_loss_state.py` (5 tests) + tests nuevos en
+  `test_trading_cycle.py` (freno de pérdida diaria bloqueando la
+  entrada en ambos ciclos, y el `try/except` de `main()` saliendo con
+  código de error en vez de propagar la excepción)
+- [x] 164 tests en total en el repo — `python -m unittest discover`
+
+## Falta para producción (correr desatendido contra Testnet)
+
+Dinero real es una decisión aparte y deliberada (ver `executor.py`) —
+esto es lo que falta para que el bot corra de forma confiable contra
+**Testnet**, sin nadie mirando cada corrida:
+
+- [ ] **Confirmar que `PAXG/USDT` existe en Binance Spot Testnet.** El
+  testnet suele listar muchos menos pares que el mercado real (donde sí
+  se corrieron los backtests) — si no está, `main.py --trade` falla al
+  conectar con el símbolo default actual.
+- [ ] **Programar el cron/systemd timer** que invoque
+  `main.py --trade` una vez por cierre de vela (hora en punto, para
+  `TIMEFRAME=1h`). El código está listo para eso; el timer en sí no
+  existe en ningún lado todavía.
+- [ ] **Correr de punta a punta contra el Testnet real al menos una
+  vez**, no solo contra `FakeExchange` en los tests — confirmar que las
+  API keys, el sizing y la colocación de órdenes funcionan contra el
+  exchange real antes de dejarlo desatendido.
 
 ## Decisiones tomadas hasta ahora
 

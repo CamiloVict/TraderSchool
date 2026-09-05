@@ -92,6 +92,21 @@ class FakeExchange:
 
 
 class RunTradingCycleTests(unittest.TestCase):
+    def setUp(self):
+        # main._daily_loss_limit_hit() persists today's starting equity
+        # to a real file (data/daily_loss_state.json) so the circuit
+        # breaker survives across separate cron-invoked processes (see
+        # daily_loss_state.py) -- exactly what a test run must NOT do,
+        # since one test's equity would otherwise leak into the next as
+        # a stale "start of day" baseline. Patched to behave like a
+        # fresh day with zero realized P&L every time: the daily-loss
+        # feature has its own dedicated tests in test_daily_loss_state.py
+        # and in test_blocks_a_new_entry_when_the_daily_loss_limit_is_hit
+        # below.
+        patcher = patch("main.load_or_init_starting_capital", side_effect=lambda equity, **_: equity)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_buy_places_a_protective_stop_loss(self):
         candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
         exchange = FakeExchange(candles, free={"USDT": 1000.0})
@@ -178,6 +193,18 @@ class RunTradingCycleTests(unittest.TestCase):
 
         mock_detect.assert_not_called()
         self.assertEqual(result["action"], "buy")
+
+    def test_blocks_a_new_entry_when_the_daily_loss_limit_is_hit(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        # A "starting capital" far above today's actual equity means
+        # today's realized loss already blows past MAX_DAILY_LOSS_PCT.
+        with patch("main.load_or_init_starting_capital", return_value=1_000_000.0):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_blocked_by_daily_loss_limit")
+        self.assertEqual(exchange.created_orders, [])
 
 
 def make_history_df(n: int, start_price: float = 10000.0, step: float = 10.0) -> pd.DataFrame:
@@ -284,6 +311,13 @@ class SetupEngineTradingCycleTests(unittest.TestCase):
     detector's own correctness is test_context_setups.py's job; this
     is only about whether main.py reacts to a snapshot correctly."""
 
+    def setUp(self):
+        # See RunTradingCycleTests.setUp — same reason: don't let this
+        # cycle's daily-loss check touch the real, shared state file.
+        patcher = patch("main.load_or_init_starting_capital", side_effect=lambda equity, **_: equity)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _patches(self, snapshot):
         return (
             patch("main.USE_SETUP_ENGINE", True),
@@ -312,6 +346,25 @@ class SetupEngineTradingCycleTests(unittest.TestCase):
         stop_orders = [o for o in exchange.created_orders if o["side"] == "sell"]
         self.assertEqual(len(stop_orders), 1)
         self.assertEqual(stop_orders[0]["triggerPrice"], 9000.0)
+
+    def test_blocks_a_new_entry_when_the_daily_loss_limit_is_hit(self):
+        from context_engine.schema import Direction, Invalidation, Setup, SetupName
+
+        setup = Setup(
+            name=SetupName.LIQUIDITY_SWEEP_RECLAIM,
+            direction=Direction.LONG,
+            reasons=["fake"],
+            invalidation=Invalidation(type="CLOSE_BELOW", level=9000.0, detail="fake"),
+        )
+        snapshot = make_snapshot(setups=[setup], invalidation_level=9000.0)
+        exchange = FakeExchange(make_candles(5, 10000, 0), free={"USDT": 1000.0})
+
+        p1, p2, p3, p4 = self._patches(snapshot)
+        with p1, p2, p3, p4, patch("main.load_or_init_starting_capital", return_value=1_000_000.0):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_blocked_by_daily_loss_limit")
+        self.assertEqual(exchange.created_orders, [])
 
     def test_ignores_a_short_setup_long_only_bot(self):
         from context_engine.schema import Direction, Invalidation, Setup, SetupName
@@ -397,6 +450,43 @@ class SetupEngineTradingCycleTests(unittest.TestCase):
         stop_orders = [o for o in exchange.created_orders if o["side"] == "sell"]
         self.assertEqual(len(stop_orders), 1)
         self.assertEqual(stop_orders[0]["triggerPrice"], 9200.0)
+
+
+class MainEntrypointTests(unittest.TestCase):
+    """`main()`'s --trade dispatch: the refuse-if-not-testnet guard and
+    the try/except around run_trading_cycle() that turns an unhandled
+    exception into a logged failure + nonzero exit instead of a bare
+    traceback -- the only thing that lets a cron/systemd schedule
+    actually notice a failed run. _configure_logging() is mocked out in
+    every test here so running the suite never creates a real logs/
+    directory as a side effect."""
+
+    def test_refuses_to_trade_when_testnet_is_off(self):
+        with patch("main.USE_TESTNET", False), patch("main._configure_logging"), patch(
+            "main.run_trading_cycle"
+        ) as mock_cycle, patch("sys.argv", ["main.py", "--trade"]):
+            with self.assertRaises(SystemExit) as ctx:
+                main.main()
+
+        self.assertEqual(ctx.exception.code, 1)
+        mock_cycle.assert_not_called()
+
+    def test_exits_nonzero_instead_of_propagating_when_the_cycle_raises(self):
+        with patch("main.USE_TESTNET", True), patch("main._configure_logging"), patch(
+            "main.run_trading_cycle", side_effect=RuntimeError("boom")
+        ), patch("sys.argv", ["main.py", "--trade"]):
+            with self.assertRaises(SystemExit) as ctx:
+                main.main()
+
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_runs_the_cycle_normally_when_testnet_is_on(self):
+        with patch("main.USE_TESTNET", True), patch("main._configure_logging"), patch(
+            "main.run_trading_cycle"
+        ) as mock_cycle, patch("sys.argv", ["main.py", "--trade"]):
+            main.main()
+
+        mock_cycle.assert_called_once()
 
 
 if __name__ == "__main__":

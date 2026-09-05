@@ -68,6 +68,13 @@ class DailyLossTracker:
     accepted limitation for now: on Testnet the cost of under-counting
     a day's losses after a crash is zero. Revisit before real capital.
 
+    main.py's --trade cycle runs as a brand-new process every time
+    (see its module docstring), which would otherwise reset this every
+    single call and make the breaker a no-op — daily_loss_state.py is
+    the thin file-backed layer that persists just enough (today's
+    starting equity) to build a fresh, correctly-initialized tracker
+    each cycle instead.
+
     Usage: call `record_trade_pnl()` after each closed trade, and
     check `trading_allowed()` before opening a new one.
     """
