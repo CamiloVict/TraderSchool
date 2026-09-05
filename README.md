@@ -1,5 +1,7 @@
 # trading-bot
 
+[![Tests](https://github.com/CamiloVict/TraderSchool/actions/workflows/tests.yml/badge.svg)](https://github.com/CamiloVict/TraderSchool/actions/workflows/tests.yml)
+
 Bot de trading (1h) sobre Binance, desarrollado y probado primero contra
 **Binance Spot Testnet** (https://testnet.binance.vision/). El símbolo
 por default es **PAXG/USDT** (oro) — el activo de mayor interés — pero
@@ -684,6 +686,13 @@ el resto del dashboard.
   comportamiento real), orden por timestamp, y que un fallo del
   journal nunca tira abajo el ciclo de trading
 - [x] 203 tests en total en el repo — `python -m unittest discover`
+- [x] `.github/workflows/tests.yml`: la suite corre sola en cada push y
+  PR, contra Python 3.9 y 3.12 — 3.9 específicamente para volver a
+  agarrar la regresión de sintaxis `X | None` que ya rompió una vez en
+  ese entorno (ver `context_engine/schema.py` / `executor.py`), no solo
+  la versión con la que se desarrolló. Sin acceso de red: todo lo que
+  tocaría a Binance pasa por un `FakeExchange` en los tests, así que no
+  hace falta ningún secret configurado para que corra
 
 ## Falta para producción (correr desatendido contra Testnet)
 

@@ -1,0 +1,39 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # 3.9 is here specifically because a user hit
+        # `TypeError: unsupported operand type(s) for |: 'EnumMeta' and
+        # 'NoneType'` running this repo under it (PEP 604 union syntax
+        # needs `from __future__ import annotations` to work pre-3.10,
+        # which context_engine/schema.py and executor.py both have) --
+        # catching that class of regression again needs 3.9 actually
+        # exercised, not just the newer interpreter this was fixed
+        # under. 3.12 matches the README's own recommended venv version.
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the test suite
+        # No network access needed or used: every test that would
+        # otherwise touch Binance goes through a FakeExchange double
+        # (see test_trading_cycle.py, test_executor.py, ...) instead of
+        # ccxt for real -- this workflow never sees API keys, and none
+        # are needed for it to pass.
+        run: python -m unittest discover -v
