@@ -13,6 +13,7 @@ from config import (
     TIMEFRAME,
     USE_TESTNET,
 )
+from retry import call_with_retries
 
 OHLCV_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
 
@@ -65,7 +66,7 @@ def fetch_ohlcv(
 ) -> pd.DataFrame:
     """Fetch up to `limit` recent candles as a DataFrame indexed by timestamp."""
     exchange = exchange or get_exchange()
-    raw_candles = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit, since=since)
+    raw_candles = call_with_retries(exchange.fetch_ohlcv, symbol, timeframe=timeframe, limit=limit, since=since)
     return _to_dataframe(raw_candles)
 
 
@@ -84,7 +85,7 @@ def fetch_ohlcv_history(
     all_rows: list = []
     cursor = since_ms
     while True:
-        batch = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=cursor, limit=limit_per_call)
+        batch = call_with_retries(exchange.fetch_ohlcv, symbol, timeframe=timeframe, since=cursor, limit=limit_per_call)
         if not batch:
             break
         all_rows.extend(batch)

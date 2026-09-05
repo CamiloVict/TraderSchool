@@ -449,7 +449,7 @@ python -m unittest test_context_validation test_context_structure \
                    test_context_setups test_context_state_machine -v
 ```
 
-O toda la suite del repo (166 tests) con `python -m unittest discover`.
+O toda la suite del repo (183 tests) con `python -m unittest discover`.
 
 ## Dashboard (React)
 
@@ -548,6 +548,16 @@ el resto del dashboard.
   `try/except` que deja el traceback en el log antes de salir con
   código de error — sin esto, un cron sin nadie mirando stdout en vivo
   no tiene forma de notar que una corrida falló
+- [x] `retry.py`: reintentos con backoff exponencial ante
+  `ccxt.NetworkError` transitorio (velas, balances, órdenes abiertas,
+  historial de trades) — un timeout puntual ya no tira abajo el ciclo
+  entero. Deliberadamente **no** se usa para colocar órdenes: un
+  timeout ahí no dice si la orden llegó a Binance o no, así que
+  reintentar a ciegas arriesga duplicarla
+- [x] `executor.py`: `newClientOrderId` determinístico (símbolo + lado
+  + hora UTC actual) en toda orden — si la misma orden se reenvía dos
+  veces (un reintento, o el mismo ciclo horario corriendo de nuevo),
+  Binance rechaza el duplicado en vez de ejecutarlo otra vez
 - [x] `executor.py`: órdenes de mercado y stop-loss real
   (`STOP_LOSS_LIMIT`) en Testnet, bloqueadas si `USE_TESTNET` es `False`
 - [x] `dashboard/`: panel React (Vite) con gráfico de velas real
@@ -606,9 +616,15 @@ el resto del dashboard.
   un mock no vería)
 - [x] `test_daily_loss_state.py` (5 tests) + tests nuevos en
   `test_trading_cycle.py` (freno de pérdida diaria bloqueando la
-  entrada en ambos ciclos, y el `try/except` de `main()` saliendo con
-  código de error en vez de propagar la excepción)
-- [x] 166 tests en total en el repo — `python -m unittest discover`
+  entrada en ambos ciclos, el `try/except` de `main()` saliendo con
+  código de error en vez de propagar la excepción, y el chequeo de que
+  `SYMBOL` esté listado antes de operar)
+- [x] `test_retry.py` (6 tests), `test_executor.py` (8 tests) y
+  `test_data_fetcher.py` (3 tests): reintentos con backoff exponencial
+  que se recuperan de un `NetworkError` transitorio pero no tocan
+  ningún otro error, y el `newClientOrderId` determinístico por
+  símbolo+lado+hora en toda orden colocada
+- [x] 183 tests en total en el repo — `python -m unittest discover`
 
 ## Falta para producción (correr desatendido contra Testnet)
 

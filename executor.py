@@ -7,9 +7,33 @@ later — never a side effect of some other change.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import ccxt
 
 from config import STOP_LOSS_LIMIT_SLIPPAGE_PCT, USE_TESTNET
+from retry import call_with_retries
+
+
+def _client_order_id(symbol: str, side: str) -> str:
+    """Deterministic id for a symbol+side+current-UTC-hour, passed as
+    Binance's `newClientOrderId`.
+
+    The failure mode this guards against: a create_order() call times
+    out client-side (a ccxt.NetworkError) with no way to tell whether
+    the order actually reached Binance and filled anyway. Retrying
+    blindly risks placing it twice — this repo deliberately does not
+    wrap order placement in retry.call_with_retries for that reason.
+    Instead, since a real resubmission (a retry, or the same hourly
+    --trade cycle running twice) recomputes the exact same id, Binance
+    itself rejects the duplicate rather than executing it a second
+    time. Bucketed by hour, not by exact timestamp, because it needs to
+    match across two separate process invocations up to an hour apart,
+    not just within one.
+    """
+    compact_symbol = symbol.replace("/", "")
+    hour_bucket = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+    return f"bot{compact_symbol}{side[0]}{hour_bucket}"
 
 
 class LiveTradingDisabledError(RuntimeError):
@@ -32,7 +56,13 @@ def place_market_order(exchange: ccxt.binance, symbol: str, side: str, amount: f
         raise ValueError(f"side must be 'buy' or 'sell', got {side!r}")
     if amount <= 0:
         raise ValueError(f"amount must be positive, got {amount}")
-    return exchange.create_order(symbol, type="market", side=side, amount=amount)
+    return exchange.create_order(
+        symbol,
+        type="market",
+        side=side,
+        amount=amount,
+        params={"newClientOrderId": _client_order_id(symbol, side)},
+    )
 
 
 def place_stop_loss_order(
@@ -65,7 +95,7 @@ def place_stop_loss_order(
         side="sell",
         amount=amount,
         price=limit_price,
-        params={"stopPrice": stop_price},
+        params={"stopPrice": stop_price, "newClientOrderId": _client_order_id(symbol, "sell")},
     )
 
 
@@ -91,7 +121,7 @@ def get_open_stop_loss_orders(exchange: ccxt.binance, symbol: str) -> list:
     STOP_LOSS_LIMIT down to plain "limit" for spot) is what actually
     distinguishes a stop order from a regular resting limit order.
     """
-    open_orders = exchange.fetch_open_orders(symbol)
+    open_orders = call_with_retries(exchange.fetch_open_orders, symbol)
     return [o for o in open_orders if o.get("side") == "sell" and o.get("triggerPrice")]
 
 
@@ -115,7 +145,7 @@ def get_last_fill_price(exchange: ccxt.binance, symbol: str, side: str) -> float
     local state is kept — e.g. self-healing a missing stop-loss order
     after a crash between the buy and the stop-loss placement. Returns
     0.0 if no matching trade is found."""
-    trades = exchange.fetch_my_trades(symbol, limit=20)
+    trades = call_with_retries(exchange.fetch_my_trades, symbol, limit=20)
     for trade in reversed(trades):
         if trade.get("side") == side:
             return float(trade["price"])
@@ -128,7 +158,7 @@ def get_base_asset_balance(exchange: ccxt.binance, symbol: str) -> float:
     the coins it covers out of this — use get_total_base_asset_balance()
     to check "are we in a position" once stop-loss orders are in play."""
     base_asset = symbol.split("/")[0]
-    balance = exchange.fetch_balance()
+    balance = call_with_retries(exchange.fetch_balance)
     return float(balance.get("free", {}).get(base_asset, 0.0) or 0.0)
 
 
@@ -138,12 +168,12 @@ def get_total_base_asset_balance(exchange: ccxt.binance, symbol: str) -> float:
     (not the free-only balance) is the correct measure of "are we in a
     position" once stop-loss orders are in play."""
     base_asset = symbol.split("/")[0]
-    balance = exchange.fetch_balance()
+    balance = call_with_retries(exchange.fetch_balance)
     return float(balance.get("total", {}).get(base_asset, 0.0) or 0.0)
 
 
 def get_quote_asset_balance(exchange: ccxt.binance, symbol: str) -> float:
     """Free balance of the quote asset for `symbol` (e.g. 'USDT' in 'BTC/USDT')."""
     quote_asset = symbol.split("/")[1]
-    balance = exchange.fetch_balance()
+    balance = call_with_retries(exchange.fetch_balance)
     return float(balance.get("free", {}).get(quote_asset, 0.0) or 0.0)

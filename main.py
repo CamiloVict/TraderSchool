@@ -65,6 +65,17 @@ cycle in a try/except that logs any exception with its traceback before
 exiting non-zero — the only way cron/systemd (nobody watching stdout
 live) can tell a run actually failed instead of it just silently going
 missing from the schedule.
+
+Every exchange *read* (candles, balances, open orders, trade history)
+retries a transient ccxt.NetworkError with backoff (see retry.py) — a
+one-off timeout no longer fails the whole cycle. Order *placement*
+(executor.place_market_order / place_stop_loss_order) is deliberately
+never retried that way: a timeout there doesn't tell you whether the
+order actually reached Binance, so a blind retry risks placing it
+twice. Those calls carry a deterministic newClientOrderId instead
+(symbol + side + current UTC hour), so if the exact same order is ever
+submitted twice — a retry, or this same hourly cycle running again —
+Binance itself rejects the duplicate rather than executing it again.
 """
 import argparse
 import logging
@@ -83,6 +94,7 @@ from config import (
 from daily_loss_state import load_or_init_starting_capital
 from data_fetcher import fetch_ohlcv, get_exchange
 from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
+from retry import call_with_retries
 from risk_manager import DailyLossTracker
 from strategy import SLOW_PERIOD, add_signals
 
@@ -113,7 +125,7 @@ def check_connection() -> None:
     exchange = get_exchange()
 
     try:
-        markets = exchange.load_markets()
+        markets = call_with_retries(exchange.load_markets)
         print(f"Connected OK. {len(markets)} markets available.")
     except Exception as exc:
         print(f"Failed to connect / load markets: {exc}")
@@ -147,7 +159,7 @@ def check_connection() -> None:
     if BINANCE_API_KEY:
         print("\nAPI key detected, checking authenticated access (balance) ...")
         try:
-            balance = exchange.fetch_balance()
+            balance = call_with_retries(exchange.fetch_balance)
             totals = balance.get("total", {}) or {}
             non_zero = {asset: amount for asset, amount in totals.items() if amount}
             print(f"Auth OK. Non-zero balances: {non_zero or '(none)'}")
