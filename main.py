@@ -55,8 +55,15 @@ Both cycles refuse new entries once today's (UTC) realized loss hits
 MAX_DAILY_LOSS_PCT (action "entry_blocked_by_daily_loss_limit") — see
 _daily_loss_limit_hit() and daily_loss_state.py for why that needs its
 own tiny persisted file on top of risk_manager.DailyLossTracker, given
---trade's one-process-per-cron-tick invocation model above. It only
-blocks new entries; an existing position still exits through its own
+--trade's one-process-per-cron-tick invocation model above. Same
+pattern, independently, for the current ISO week
+(MAX_WEEKLY_LOSS_PCT, "entry_blocked_by_weekly_loss_limit" — see
+_weekly_loss_limit_hit()/weekly_loss_state.py/WeeklyLossTracker) and
+for a losing streak (MAX_CONSECUTIVE_LOSSES closed trades in a row,
+"entry_blocked_by_consecutive_losses" — see
+_consecutive_losses_hit()/risk_manager.consecutive_losses(), read
+straight off trade_journal.py's own persisted history). All three only
+block new entries; an existing position still exits through its own
 normal rules.
 
 `--trade` logs to both the console and a rotating logs/trading.log
@@ -94,6 +101,7 @@ import sys
 from config import (
     BINANCE_API_KEY,
     CONTEXT_HISTORY_DAYS,
+    MAX_CONSECUTIVE_LOSSES,
     SYMBOL,
     TIMEFRAME,
     USE_PATTERN_FILTER,
@@ -108,9 +116,10 @@ from heartbeat import record_heartbeat
 from notifier import notify
 from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
 from retry import call_with_retries
-from risk_manager import DailyLossTracker
+from risk_manager import DailyLossTracker, WeeklyLossTracker, consecutive_losses
 from strategy import SLOW_PERIOD, add_signals
-from trade_journal import record_trades
+from trade_journal import read_journal, record_trades
+import weekly_loss_state
 
 logger = logging.getLogger("trading_bot")
 
@@ -132,6 +141,32 @@ def _daily_loss_limit_hit(current_equity: float) -> bool:
     tracker = DailyLossTracker(starting_capital=starting_capital)
     tracker.record_trade_pnl(current_equity - starting_capital)
     return not tracker.trading_allowed()
+
+
+def _weekly_loss_limit_hit(current_equity: float) -> bool:
+    """Same idea as _daily_loss_limit_hit(), over the current ISO week
+    instead of the current UTC day -- see weekly_loss_state.py and
+    risk_manager.WeeklyLossTracker. Independent of the daily limit: a
+    string of small losing days that never individually trips the
+    daily breaker can still add up to a week worth stopping to
+    reassess.
+    """
+    starting_capital = weekly_loss_state.load_or_init_starting_capital(current_equity)
+    tracker = WeeklyLossTracker(starting_capital=starting_capital)
+    tracker.record_trade_pnl(current_equity - starting_capital)
+    return not tracker.trading_allowed()
+
+
+def _consecutive_losses_hit() -> bool:
+    """True if the most recent MAX_CONSECUTIVE_LOSSES *closed* trades
+    all lost money -- new entries should pause until a win breaks the
+    streak. Reads whatever trade_journal.py already persisted as of
+    the start of this cycle (the previous cycle's own record_trades()
+    call already synced any trade that closed since); does not itself
+    trigger a fresh exchange fetch.
+    """
+    journal = read_journal()
+    return consecutive_losses(journal) >= MAX_CONSECUTIVE_LOSSES
 
 
 def check_connection() -> None:
@@ -271,6 +306,8 @@ def _run_ema_cycle(exchange) -> dict:
 
     entry_blocked_by_pattern = False
     daily_loss_limit_hit = False
+    weekly_loss_limit_hit = False
+    consecutive_losses_hit = False
     if signal == 1 and not in_position:
         if USE_PATTERN_FILTER:
             pattern_signal = detect_reversal_patterns(data)
@@ -278,9 +315,19 @@ def _run_ema_cycle(exchange) -> dict:
                 bearish_veto_mask(pattern_signal, PATTERN_VETO_LOOKBACK).iloc[-1]
             )
         quote_balance = get_quote_asset_balance(exchange, SYMBOL)
-        daily_loss_limit_hit = _daily_loss_limit_hit(quote_balance + total_balance * price)
+        equity = quote_balance + total_balance * price
+        daily_loss_limit_hit = _daily_loss_limit_hit(equity)
+        weekly_loss_limit_hit = _weekly_loss_limit_hit(equity)
+        consecutive_losses_hit = _consecutive_losses_hit()
 
-    if signal == 1 and not in_position and not entry_blocked_by_pattern and not daily_loss_limit_hit:
+    if (
+        signal == 1
+        and not in_position
+        and not entry_blocked_by_pattern
+        and not daily_loss_limit_hit
+        and not weekly_loss_limit_hit
+        and not consecutive_losses_hit
+    ):
         size = position_size(quote_balance, price, stop_price=stop_for(price))
         if size > 0:
             order = place_market_order(exchange, SYMBOL, "buy", size)
@@ -297,6 +344,10 @@ def _run_ema_cycle(exchange) -> dict:
         action = "entry_blocked_by_pattern"
     elif signal == 1 and not in_position and daily_loss_limit_hit:
         action = "entry_blocked_by_daily_loss_limit"
+    elif signal == 1 and not in_position and weekly_loss_limit_hit:
+        action = "entry_blocked_by_weekly_loss_limit"
+    elif signal == 1 and not in_position and consecutive_losses_hit:
+        action = "entry_blocked_by_consecutive_losses"
     elif signal == 0 and in_position:
         # Cancel the protective stop first so it doesn't compete with
         # this market sell for the same (currently locked) balance.
@@ -412,11 +463,23 @@ def _run_setup_engine_cycle(exchange) -> dict:
     stop_order = None
 
     daily_loss_limit_hit = False
+    weekly_loss_limit_hit = False
+    consecutive_losses_hit = False
     if long_setup is not None and not in_position and not context.no_trade:
         quote_balance = get_quote_asset_balance(exchange, SYMBOL)
-        daily_loss_limit_hit = _daily_loss_limit_hit(quote_balance + total_balance * price)
+        equity = quote_balance + total_balance * price
+        daily_loss_limit_hit = _daily_loss_limit_hit(equity)
+        weekly_loss_limit_hit = _weekly_loss_limit_hit(equity)
+        consecutive_losses_hit = _consecutive_losses_hit()
 
-    if long_setup is not None and not in_position and not context.no_trade and not daily_loss_limit_hit:
+    if (
+        long_setup is not None
+        and not in_position
+        and not context.no_trade
+        and not daily_loss_limit_hit
+        and not weekly_loss_limit_hit
+        and not consecutive_losses_hit
+    ):
         stop_reference = long_setup.invalidation.level
         if stop_reference is None or stop_reference >= price:
             stop_reference = stop_loss_price(price)  # degenerate level: fall back to the flat %
@@ -428,6 +491,10 @@ def _run_setup_engine_cycle(exchange) -> dict:
             stop_order = place_stop_loss_order(exchange, SYMBOL, filled_amount, stop_reference)
     elif long_setup is not None and not in_position and not context.no_trade and daily_loss_limit_hit:
         action = "entry_blocked_by_daily_loss_limit"
+    elif long_setup is not None and not in_position and not context.no_trade and weekly_loss_limit_hit:
+        action = "entry_blocked_by_weekly_loss_limit"
+    elif long_setup is not None and not in_position and not context.no_trade and consecutive_losses_hit:
+        action = "entry_blocked_by_consecutive_losses"
     elif in_position and (context.no_trade or not bullish_bias or bearish_pattern):
         # The bias that justified this position is gone, context says
         # not to trade at all right now, or a bearish pattern just

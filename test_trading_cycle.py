@@ -13,18 +13,18 @@ import pandas as pd
 
 import main
 import risk_manager
-from config import SYMBOL
+from config import MAX_CONSECUTIVE_LOSSES, SYMBOL
 from strategy import SLOW_PERIOD
 
 
 def _stub_disk_touching_side_effects(test_case):
     """run_trading_cycle() has side effects that persist to real files
-    under data/ (daily_loss_state.json, trade_journal.json,
-    balance_history.json, heartbeat.json) so they survive across
-    main.py --trade's separate cron-invoked processes -- exactly what a
-    test run must NOT do, since one test's values would otherwise leak
-    into the next as a stale baseline or a lingering record. Each has
-    its own dedicated tests (test_daily_loss_state.py,
+    under data/ (daily_loss_state.json, weekly_loss_state.json,
+    trade_journal.json, balance_history.json, heartbeat.json) so they
+    survive across main.py --trade's separate cron-invoked processes --
+    exactly what a test run must NOT do, since one test's values would
+    otherwise leak into the next as a stale baseline or a lingering
+    record. Each has its own dedicated tests (test_daily_loss_state.py,
     test_trade_journal.py, test_balance_snapshot.py,
     test_heartbeat.py); every test here just needs them out of the way.
     """
@@ -32,9 +32,22 @@ def _stub_disk_touching_side_effects(test_case):
     loss_patcher.start()
     test_case.addCleanup(loss_patcher.stop)
 
+    weekly_loss_patcher = patch(
+        "main.weekly_loss_state.load_or_init_starting_capital", side_effect=lambda equity, **_: equity
+    )
+    weekly_loss_patcher.start()
+    test_case.addCleanup(weekly_loss_patcher.stop)
+
     journal_patcher = patch("main.record_trades")
     journal_patcher.start()
     test_case.addCleanup(journal_patcher.stop)
+
+    # Empty by default -- no test here is about a pre-existing losing
+    # streak unless it patches this itself (see
+    # test_blocks_a_new_entry_when_max_consecutive_losses_is_hit).
+    read_journal_patcher = patch("main.read_journal", return_value=[])
+    read_journal_patcher.start()
+    test_case.addCleanup(read_journal_patcher.stop)
 
     balance_patcher = patch("main.record_balance")
     balance_patcher.start()
@@ -56,6 +69,40 @@ def make_candles(n: int, start_price: float, step: float):
         price = start_price + step * i
         rows.append([ts_ms, price, price, price, price, 1.0])
     return rows
+
+
+def make_losing_streak(n: int):
+    """`n` closed round trips (buy then sell, each sell below its own
+    buy), trade_journal.py-shaped -- for
+    risk_manager.consecutive_losses()."""
+    trades = []
+    start = pd.Timestamp("2024-01-01", tz="UTC")
+    for i in range(n):
+        buy_time = start + pd.Timedelta(hours=2 * i)
+        sell_time = start + pd.Timedelta(hours=2 * i + 1)
+        trades.append(
+            {
+                "id": f"buy-{i}",
+                "timestamp": int(buy_time.timestamp() * 1000),
+                "datetime": buy_time.isoformat(),
+                "symbol": SYMBOL,
+                "side": "buy",
+                "price": 100.0,
+                "amount": 1.0,
+            }
+        )
+        trades.append(
+            {
+                "id": f"sell-{i}",
+                "timestamp": int(sell_time.timestamp() * 1000),
+                "datetime": sell_time.isoformat(),
+                "symbol": SYMBOL,
+                "side": "sell",
+                "price": 95.0,  # below the buy -> a loss
+                "amount": 1.0,
+            }
+        )
+    return trades
 
 
 def make_candles_from_closes(closes: list):
@@ -255,6 +302,37 @@ class RunTradingCycleTests(unittest.TestCase):
 
         self.assertEqual(result["action"], "entry_blocked_by_daily_loss_limit")
         self.assertEqual(exchange.created_orders, [])
+
+    def test_blocks_a_new_entry_when_the_weekly_loss_limit_is_hit(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        with patch("main.weekly_loss_state.load_or_init_starting_capital", return_value=1_000_000.0):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_blocked_by_weekly_loss_limit")
+        self.assertEqual(exchange.created_orders, [])
+
+    def test_blocks_a_new_entry_when_max_consecutive_losses_is_hit(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+        losing_streak = make_losing_streak(MAX_CONSECUTIVE_LOSSES)
+
+        with patch("main.read_journal", return_value=losing_streak):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_blocked_by_consecutive_losses")
+        self.assertEqual(exchange.created_orders, [])
+
+    def test_does_not_block_when_the_losing_streak_is_shorter_than_the_max(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+        short_streak = make_losing_streak(MAX_CONSECUTIVE_LOSSES - 1)
+
+        with patch("main.read_journal", return_value=short_streak):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "buy")
 
 
 class NotifyWiringTests(unittest.TestCase):
@@ -501,6 +579,45 @@ class SetupEngineTradingCycleTests(unittest.TestCase):
             result = main.run_trading_cycle(exchange)
 
         self.assertEqual(result["action"], "entry_blocked_by_daily_loss_limit")
+        self.assertEqual(exchange.created_orders, [])
+
+    def test_blocks_a_new_entry_when_the_weekly_loss_limit_is_hit(self):
+        from context_engine.schema import Direction, Invalidation, Setup, SetupName
+
+        setup = Setup(
+            name=SetupName.LIQUIDITY_SWEEP_RECLAIM,
+            direction=Direction.LONG,
+            reasons=["fake"],
+            invalidation=Invalidation(type="CLOSE_BELOW", level=9000.0, detail="fake"),
+        )
+        snapshot = make_snapshot(setups=[setup], invalidation_level=9000.0)
+        exchange = FakeExchange(make_candles(5, 10000, 0), free={"USDT": 1000.0})
+
+        p1, p2, p3, p4 = self._patches(snapshot)
+        with p1, p2, p3, p4, patch("main.weekly_loss_state.load_or_init_starting_capital", return_value=1_000_000.0):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_blocked_by_weekly_loss_limit")
+        self.assertEqual(exchange.created_orders, [])
+
+    def test_blocks_a_new_entry_when_max_consecutive_losses_is_hit(self):
+        from context_engine.schema import Direction, Invalidation, Setup, SetupName
+
+        setup = Setup(
+            name=SetupName.LIQUIDITY_SWEEP_RECLAIM,
+            direction=Direction.LONG,
+            reasons=["fake"],
+            invalidation=Invalidation(type="CLOSE_BELOW", level=9000.0, detail="fake"),
+        )
+        snapshot = make_snapshot(setups=[setup], invalidation_level=9000.0)
+        exchange = FakeExchange(make_candles(5, 10000, 0), free={"USDT": 1000.0})
+        losing_streak = make_losing_streak(MAX_CONSECUTIVE_LOSSES)
+
+        p1, p2, p3, p4 = self._patches(snapshot)
+        with p1, p2, p3, p4, patch("main.read_journal", return_value=losing_streak):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_blocked_by_consecutive_losses")
         self.assertEqual(exchange.created_orders, [])
 
     def test_ignores_a_short_setup_long_only_bot(self):

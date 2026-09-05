@@ -37,6 +37,17 @@ STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "2.0"))
 TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "4.0"))
 # Daily circuit breaker: stop trading for the day after losing this % of capital.
 MAX_DAILY_LOSS_PCT = float(os.getenv("MAX_DAILY_LOSS_PCT", "5.0"))
+# Weekly circuit breaker: same idea as MAX_DAILY_LOSS_PCT, over the
+# current ISO week (UTC, Monday-start) instead of the current UTC day.
+# A bad week can clear the daily limit's bar on no single day yet still
+# be a week worth stopping to reassess.
+MAX_WEEKLY_LOSS_PCT = float(os.getenv("MAX_WEEKLY_LOSS_PCT", "10.0"))
+# Stop new entries after this many *closed* trades in a row lost money
+# (existing positions still exit through their own normal rules). Does
+# not itself change RISK_PER_TRADE_PCT -- see risk_manager.py's own
+# note on why risk is never auto-adjusted from a losing streak without
+# separate, deliberate evidence that doing so helps.
+MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "5"))
 # How far below the stop-loss trigger the STOP_LOSS_LIMIT's limit price
 # sits, so the order still fills during a fast drop instead of resting
 # unfilled above the market once triggered.

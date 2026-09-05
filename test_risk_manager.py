@@ -1,7 +1,8 @@
 """Tests for risk_manager.position_size's stop_price override — the
 piece the Setup Engine path in main.py needs to size against a
-structural invalidation level instead of the flat STOP_LOSS_PCT — and
-for structural_stop_price's own swing-based stop derivation.
+structural invalidation level instead of the flat STOP_LOSS_PCT — for
+structural_stop_price's own swing-based stop derivation, and for
+consecutive_losses' trade_journal.py-shaped streak counting.
 
 Run with: python -m unittest test_risk_manager -v
 """
@@ -9,7 +10,7 @@ import unittest
 
 import pandas as pd
 
-from risk_manager import position_size, stop_loss_price, structural_stop_price
+from risk_manager import consecutive_losses, position_size, stop_loss_price, structural_stop_price
 
 
 def make_df(closes: list) -> pd.DataFrame:
@@ -90,6 +91,76 @@ class StructuralStopPriceTests(unittest.TestCase):
         stop = structural_stop_price(df, entry_price=90.0, side="short")
 
         self.assertGreater(stop, 100.0, "stop should sit above the swing high, not on top of it")
+
+
+def make_trade(id, timestamp, side, price, amount=1.0):
+    return {
+        "id": id,
+        "timestamp": timestamp,
+        "datetime": f"2024-01-01T{timestamp:02d}:00:00Z",
+        "symbol": "PAXG/USDT",
+        "side": side,
+        "price": price,
+        "amount": amount,
+    }
+
+
+class ConsecutiveLossesTests(unittest.TestCase):
+    def test_counts_losses_back_to_back_at_the_end_of_the_journal(self):
+        trades = [
+            make_trade(1, 1, "buy", 100.0),
+            make_trade(2, 2, "sell", 105.0),  # win, doesn't count
+            make_trade(3, 3, "buy", 100.0),
+            make_trade(4, 4, "sell", 95.0),  # loss
+            make_trade(5, 5, "buy", 100.0),
+            make_trade(6, 6, "sell", 90.0),  # loss
+        ]
+
+        self.assertEqual(consecutive_losses(trades), 2)
+
+    def test_a_win_anywhere_in_the_streak_resets_the_count_from_there(self):
+        trades = [
+            make_trade(1, 1, "buy", 100.0),
+            make_trade(2, 2, "sell", 90.0),  # loss
+            make_trade(3, 3, "buy", 100.0),
+            make_trade(4, 4, "sell", 110.0),  # win -- breaks the streak
+            make_trade(5, 5, "buy", 100.0),
+            make_trade(6, 6, "sell", 95.0),  # loss
+        ]
+
+        self.assertEqual(consecutive_losses(trades), 1)
+
+    def test_still_open_position_at_the_end_does_not_count_as_anything(self):
+        trades = [
+            make_trade(1, 1, "buy", 100.0),
+            make_trade(2, 2, "sell", 90.0),  # loss
+            make_trade(3, 3, "buy", 100.0),  # still open, not a closed trade
+        ]
+
+        self.assertEqual(consecutive_losses(trades), 1)
+
+    def test_a_sell_with_no_preceding_buy_is_skipped_not_counted_either_way(self):
+        # The real case that already happened once: the account held
+        # the asset before the journal started tracking it. Unknown
+        # result -- must neither extend nor break the streak.
+        trades = [
+            make_trade(1, 1, "sell", 100.0),  # no matching buy -- unknown
+            make_trade(2, 2, "buy", 100.0),
+            make_trade(3, 3, "sell", 90.0),  # loss
+        ]
+
+        self.assertEqual(consecutive_losses(trades), 1)
+
+    def test_empty_journal_has_no_streak(self):
+        self.assertEqual(consecutive_losses([]), 0)
+
+    def test_out_of_order_input_is_sorted_by_timestamp_first(self):
+        trades = [
+            make_trade(2, 2, "sell", 90.0),  # loss, but listed first
+            make_trade(1, 1, "buy", 100.0),
+        ]
+
+        self.assertEqual(consecutive_losses(trades), 1)
 
 
 if __name__ == "__main__":

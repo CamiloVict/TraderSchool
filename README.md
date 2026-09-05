@@ -629,6 +629,22 @@ Sigue sin haber backend: todo sale de JSON estáticos en
   nuevas entradas (`entry_blocked_by_daily_loss_limit`) apenas la
   pérdida realizada del día llega a `MAX_DAILY_LOSS_PCT`; una posición
   ya abierta sigue saliendo por sus reglas normales
+- [x] `weekly_loss_state.py` + `WeeklyLossTracker`: mismo mecanismo que
+  el límite diario, pero sobre la semana ISO (UTC) actual —
+  independiente del diario, porque una racha de pérdidas chicas que
+  nunca dispara el límite de un día puede sumar una semana mala.
+  Bloquea con `entry_blocked_by_weekly_loss_limit` al llegar a
+  `MAX_WEEKLY_LOSS_PCT`
+- [x] `risk_manager.consecutive_losses()`: cuenta cuántas operaciones
+  *cerradas* seguidas perdieron plata, leyendo directamente
+  `trade_journal.json` (empareja compra/venta con el mismo FIFO trivial
+  que ya usa el dashboard — long-only, una sola posición, nunca es
+  ambiguo qué compra cierra qué venta). Al llegar a
+  `MAX_CONSECUTIVE_LOSSES`, bloquea nuevas entradas
+  (`entry_blocked_by_consecutive_losses`) hasta que una operación
+  cierre en ganancia. No ajusta el riesgo por operación automáticamente
+  — eso necesitaría evidencia estadística de que ayuda, no solo una
+  mala racha
 - [x] `main.py --trade`: loggea a consola y a `logs/trading.log`
   (rotado) en vez de `print()`, y envuelve el ciclo completo en un
   `try/except` que deja el traceback en el log antes de salir con

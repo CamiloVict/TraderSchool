@@ -52,6 +52,14 @@ def record_trades(exchange, symbol: str, journal_path: str = DEFAULT_JOURNAL_PAT
     return updated
 
 
+def read_journal(journal_path: str = DEFAULT_JOURNAL_PATH) -> list:
+    """The currently-persisted journal, with no fetch -- for callers
+    (risk_manager.consecutive_losses via main.py) that just need what's
+    already on disk as of the start of this cycle, not a fresh sync.
+    """
+    return _read(journal_path)
+
+
 def _slim(trade: dict) -> dict:
     return {field: trade.get(field) for field in _KEPT_FIELDS}
 

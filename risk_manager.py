@@ -16,6 +16,7 @@ import pandas as pd
 
 from config import (
     MAX_DAILY_LOSS_PCT,
+    MAX_WEEKLY_LOSS_PCT,
     RISK_PER_TRADE_PCT,
     STOP_LOSS_PCT,
     STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE,
@@ -152,3 +153,73 @@ class DailyLossTracker:
             return False
         loss_pct = -self._realized_pnl / self.starting_capital * 100
         return loss_pct < MAX_DAILY_LOSS_PCT
+
+
+@dataclass
+class WeeklyLossTracker:
+    """Same idea as DailyLossTracker, over the current ISO week
+    (Monday-start, UTC) instead of the current UTC day — see that
+    class's own docstring for the in-memory-only / weekly_loss_state.py
+    rationale, identical here just on a weekly key.
+
+    A bad week can clear the daily limit's bar on every single day
+    (a string of small losing days that never individually trips
+    MAX_DAILY_LOSS_PCT) and still be a week worth stopping to
+    reassess — the two limits are independent, not one replacing
+    the other.
+    """
+
+    starting_capital: float
+    _week: tuple = field(default_factory=lambda: date.today().isocalendar()[:2], init=False)
+    _realized_pnl: float = field(default=0.0, init=False)
+
+    def _roll_week_if_needed(self) -> None:
+        current_week = date.today().isocalendar()[:2]
+        if current_week != self._week:
+            self._week = current_week
+            self._realized_pnl = 0.0
+
+    def record_trade_pnl(self, pnl: float) -> None:
+        self._roll_week_if_needed()
+        self._realized_pnl += pnl
+
+    def trading_allowed(self) -> bool:
+        self._roll_week_if_needed()
+        if self.starting_capital <= 0:
+            return False
+        loss_pct = -self._realized_pnl / self.starting_capital * 100
+        return loss_pct < MAX_WEEKLY_LOSS_PCT
+
+
+def consecutive_losses(trades: list) -> int:
+    """How many of the most recent *closed* round-trips, in a row, lost
+    money — from a trade_journal.py-shaped list of raw fills.
+
+    Pairs each sell with the buy immediately preceding it (FIFO, no
+    lot-matching needed: the bot is long-only and single-position, see
+    main.py's own docstring, so "the last unmatched buy before this
+    sell" is never ambiguous — same rule the dashboard's
+    lib/pnl.js.computeClosedTrades uses). A sell with no preceding buy
+    (the account already held the asset before the journal started
+    tracking it — a real case that already happened once) is skipped
+    entirely: an unknown result neither extends nor breaks the streak,
+    since guessing it either way would be inventing evidence.
+    """
+    sorted_trades = sorted(trades, key=lambda t: t.get("timestamp") or 0)
+
+    closed_was_loss = []
+    open_buy = None
+    for trade in sorted_trades:
+        if trade.get("side") == "buy":
+            open_buy = trade
+        elif trade.get("side") == "sell":
+            if open_buy is not None:
+                closed_was_loss.append(trade["price"] < open_buy["price"])
+            open_buy = None
+
+    streak = 0
+    for was_loss in reversed(closed_was_loss):
+        if not was_loss:
+            break
+        streak += 1
+    return streak
