@@ -159,6 +159,20 @@ falla (token vencido, sin red), queda logueado como warning pero nunca
 tira abajo el ciclo de trading — una alerta rota no debería convertirse
 en una razón más para que `--trade` falle.
 
+### Historial de operaciones reales (`trade_journal.py`)
+
+Los backtests son simulación; esto es lo que el bot **hizo de verdad**.
+Cada corrida de `--trade` sincroniza el historial de operaciones real
+de Binance para `SYMBOL` a `data/trade_journal.json`, deduplicado por
+el id de operación propio de Binance — así no hace falta entrar a la
+cuenta a mano para ver qué pasó. Guarda solo los fills crudos (id,
+timestamp, lado, precio, cantidad, costo, comisión), no P&L por
+posición todavía — armar esa lógica de emparejamiento entrada/salida
+sin operaciones reales contra las cuales validarla sería adivinar la
+forma en vez de aprenderla; un paso natural una vez que haya datos de
+verdad. Igual que las notificaciones, es best-effort: un fallo acá
+queda logueado pero nunca tira abajo el ciclo de trading.
+
 ## Filtro de patrones de chart (`patterns.py`, opt-in)
 
 ```bash
@@ -474,7 +488,7 @@ python -m unittest test_context_validation test_context_structure \
                    test_context_setups test_context_state_machine -v
 ```
 
-O toda la suite del repo (194 tests) con `python -m unittest discover`.
+O toda la suite del repo (203 tests) con `python -m unittest discover`.
 
 ## Dashboard (React)
 
@@ -590,6 +604,10 @@ el resto del dashboard.
   ciclo de trading. El mensaje de error se loguea sin el `str()` de la
   excepción — `requests`/`urllib3` suelen incluir la URL completa en
   ese mensaje, y esa URL tiene el token/webhook secreto embebido
+- [x] `trade_journal.py`: sincroniza el historial real de operaciones
+  de Binance a `data/trade_journal.json` en cada ciclo, deduplicado por
+  id — el track record real del bot, no solo el de los backtests.
+  Best-effort igual que `notifier.py`
 - [x] `executor.py`: órdenes de mercado y stop-loss real
   (`STOP_LOSS_LIMIT`) en Testnet, bloqueadas si `USE_TESTNET` es `False`
 - [x] `dashboard/`: panel React (Vite) con gráfico de velas real
@@ -661,7 +679,11 @@ el resto del dashboard.
   importa — que un error de red que ecoa la URL completa (típico de
   `requests`/`urllib3`) nunca termina logueando el token de Telegram ni
   la URL del webhook en texto plano
-- [x] 194 tests en total en el repo — `python -m unittest discover`
+- [x] `test_trade_journal.py` (7 tests): dedup por id de Binance
+  incluso cuando `fetch_my_trades` devuelve historial solapado (su
+  comportamiento real), orden por timestamp, y que un fallo del
+  journal nunca tira abajo el ciclo de trading
+- [x] 203 tests en total en el repo — `python -m unittest discover`
 
 ## Falta para producción (correr desatendido contra Testnet)
 

@@ -16,6 +16,24 @@ import risk_manager
 from config import SYMBOL
 
 
+def _stub_disk_touching_side_effects(test_case):
+    """run_trading_cycle() has two side effects that persist to real
+    files under data/ (daily_loss_state.json, trade_journal.json) so
+    they survive across main.py --trade's separate cron-invoked
+    processes -- exactly what a test run must NOT do, since one test's
+    values would otherwise leak into the next as a stale baseline or a
+    lingering trade record. Both have their own dedicated tests
+    (test_daily_loss_state.py, test_trade_journal.py); every test here
+    just needs them out of the way."""
+    loss_patcher = patch("main.load_or_init_starting_capital", side_effect=lambda equity, **_: equity)
+    loss_patcher.start()
+    test_case.addCleanup(loss_patcher.stop)
+
+    journal_patcher = patch("main.record_trades")
+    journal_patcher.start()
+    test_case.addCleanup(journal_patcher.stop)
+
+
 def make_candles(n: int, start_price: float, step: float):
     """`n` hourly candles, close price moving by `step` each candle —
     enough of a trend that the EMA 20/50 crossover signal is
@@ -93,19 +111,7 @@ class FakeExchange:
 
 class RunTradingCycleTests(unittest.TestCase):
     def setUp(self):
-        # main._daily_loss_limit_hit() persists today's starting equity
-        # to a real file (data/daily_loss_state.json) so the circuit
-        # breaker survives across separate cron-invoked processes (see
-        # daily_loss_state.py) -- exactly what a test run must NOT do,
-        # since one test's equity would otherwise leak into the next as
-        # a stale "start of day" baseline. Patched to behave like a
-        # fresh day with zero realized P&L every time: the daily-loss
-        # feature has its own dedicated tests in test_daily_loss_state.py
-        # and in test_blocks_a_new_entry_when_the_daily_loss_limit_is_hit
-        # below.
-        patcher = patch("main.load_or_init_starting_capital", side_effect=lambda equity, **_: equity)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        _stub_disk_touching_side_effects(self)
 
     def test_buy_places_a_protective_stop_loss(self):
         candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
@@ -214,9 +220,7 @@ class NotifyWiringTests(unittest.TestCase):
     must stay silent, anything else should notify."""
 
     def setUp(self):
-        patcher = patch("main.load_or_init_starting_capital", side_effect=lambda equity, **_: equity)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        _stub_disk_touching_side_effects(self)
 
     def test_a_hold_does_not_notify(self):
         candles = make_candles(200, start_price=10000, step=0)  # flat -> no crossover either way
@@ -238,6 +242,28 @@ class NotifyWiringTests(unittest.TestCase):
         self.assertEqual(result["action"], "buy")
         mock_notify.assert_called_once()
         self.assertIn("buy", mock_notify.call_args[0][0])
+
+    def test_syncs_the_trade_journal_every_cycle_including_a_hold(self):
+        # Binance's own trade history should stay current regardless of
+        # what this cycle itself decided -- a manual trade or a fill
+        # from a previous cycle's order still belongs in the journal.
+        candles = make_candles(200, start_price=10000, step=0)  # flat -> hold
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        with patch("main.record_trades") as mock_record:
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "hold")
+        mock_record.assert_called_once_with(exchange, SYMBOL)
+
+    def test_a_broken_trade_journal_does_not_fail_the_cycle(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        with patch("main.record_trades", side_effect=RuntimeError("disk full")):
+            result = main.run_trading_cycle(exchange)  # must not raise
+
+        self.assertEqual(result["action"], "buy")
 
 
 def make_history_df(n: int, start_price: float = 10000.0, step: float = 10.0) -> pd.DataFrame:
@@ -345,11 +371,7 @@ class SetupEngineTradingCycleTests(unittest.TestCase):
     is only about whether main.py reacts to a snapshot correctly."""
 
     def setUp(self):
-        # See RunTradingCycleTests.setUp — same reason: don't let this
-        # cycle's daily-loss check touch the real, shared state file.
-        patcher = patch("main.load_or_init_starting_capital", side_effect=lambda equity, **_: equity)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        _stub_disk_touching_side_effects(self)
 
     def _patches(self, snapshot):
         return (

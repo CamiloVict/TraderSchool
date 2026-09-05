@@ -76,6 +76,14 @@ twice. Those calls carry a deterministic newClientOrderId instead
 (symbol + side + current UTC hour), so if the exact same order is ever
 submitted twice — a retry, or this same hourly cycle running again —
 Binance itself rejects the duplicate rather than executing it again.
+
+Every cycle also syncs Binance's own trade history for SYMBOL into a
+local journal (see trade_journal.py) — the only record of what the
+live bot has actually done that doesn't require reading the exchange's
+own history by hand. Both this and notify() below are best-effort: a
+failure in either is logged but never fails the cycle itself, same
+reasoning as the retry policy above applied to observability instead
+of to the trade logic.
 """
 import argparse
 import logging
@@ -98,6 +106,7 @@ from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_p
 from retry import call_with_retries
 from risk_manager import DailyLossTracker
 from strategy import SLOW_PERIOD, add_signals
+from trade_journal import record_trades
 
 logger = logging.getLogger("trading_bot")
 
@@ -187,6 +196,14 @@ def run_trading_cycle(exchange=None) -> dict:
     module docstring)."""
     exchange = exchange or get_exchange()
     result = _run_setup_engine_cycle(exchange) if USE_SETUP_ENGINE else _run_ema_cycle(exchange)
+    # Best-effort, same posture as notify() below: this cycle's actual
+    # trading decision already happened above, so a journal hiccup
+    # (a fetch that survives retry.call_with_retries and still fails, a
+    # disk write error) must never look like the cycle itself failed.
+    try:
+        record_trades(exchange, SYMBOL)
+    except Exception:
+        logger.warning("Failed to update trade_journal.py's local trade history", exc_info=True)
     if result.get("action") not in _SILENT_ACTIONS:
         notify(f"{SYMBOL} {TIMEFRAME}: {result.get('action')} @ {result.get('price')}")
     return result
