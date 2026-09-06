@@ -455,16 +455,26 @@ def _run_ema_cycle(exchange) -> dict:
             if add_size > 0:
                 size_ok, size_reject_reason = meets_exchange_minimums(exchange, SYMBOL, add_size, price)
                 if size_ok:
+                    # Cancel the existing (undersized-once-we-add) stop
+                    # BEFORE buying, not after: if anything below raises
+                    # (a network blip placing the buy or the new stop),
+                    # this leaves "in position, zero open stop orders" --
+                    # exactly the state self-heal above already detects
+                    # and repairs next cycle. Buying first would instead
+                    # risk leaving the OLD stop in place, covering less
+                    # than the new total size, which self-heal's own
+                    # "any stop present?" check can't see -- a silently
+                    # under-protected position with no cron cycle able to
+                    # notice, unlike this ordering's worst case.
+                    for stale_order in get_open_stop_loss_orders(exchange, SYMBOL):
+                        cancel_order(exchange, SYMBOL, stale_order["id"])
                     order = place_market_order(exchange, SYMBOL, "buy", add_size)
                     action = "pyramid_add"
                     fill_price = get_average_fill_price(order) or price
                     # Recalculate the stop off this tranche's own fill
-                    # price and replace the single stop order that
-                    # covers the whole position -- adding exposure also
-                    # raises the stop, it doesn't just sit on the
-                    # original tranche's level.
-                    for stale_order in get_open_stop_loss_orders(exchange, SYMBOL):
-                        cancel_order(exchange, SYMBOL, stale_order["id"])
+                    # price so it covers the whole position -- adding
+                    # exposure also raises the stop, it doesn't just
+                    # sit on the original tranche's level.
                     stop_price = stop_for(fill_price)
                     stop_source = "structural_swing_low" if USE_STRUCTURAL_STOP else "flat_stop_loss_pct"
                     new_total_balance = get_total_base_asset_balance(exchange, SYMBOL)

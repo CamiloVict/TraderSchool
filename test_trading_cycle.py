@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
+import executor
 import main
 import portfolio_risk
 import risk_manager
@@ -325,6 +326,72 @@ class RunTradingCycleTests(unittest.TestCase):
         stop_orders = [o for o in exchange.created_orders if o["side"] == "sell"]
         self.assertEqual(len(stop_orders), 1)
         self.assertIsNotNone(stop_orders[0]["triggerPrice"])
+
+    def test_pyramid_add_cancels_the_old_stop_before_buying_not_after(self):
+        # Security-review finding: buying before cancel+replace would
+        # leave the OLD (undersized) stop in place if anything raised in
+        # between, and self-heal's "any stop present?" check can't see
+        # that it's undersized. Cancelling first means a failure after
+        # this point instead leaves "in position, zero open stops" --
+        # the exact state self-heal already knows how to repair.
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        base = SYMBOL.split("/")[0]
+        stale_stop = {"id": "stop-1", "side": "sell", "amount": 1.0, "triggerPrice": 9800.0}
+        exchange = FakeExchange(
+            candles,
+            free={base: 1.0, "USDT": 1000.0},
+            open_orders=[stale_stop],
+            trades=[{"side": "buy", "price": 10000.0, "amount": 1.0}],
+        )
+        events = []
+        real_cancel_order = executor.cancel_order
+        real_place_market_order = executor.place_market_order
+
+        def tracking_cancel_order(*args, **kwargs):
+            events.append("cancel")
+            return real_cancel_order(*args, **kwargs)
+
+        def tracking_place_market_order(*args, **kwargs):
+            events.append("buy")
+            return real_place_market_order(*args, **kwargs)
+
+        # cancel_order/place_market_order are imported locally inside
+        # _run_ema_cycle() (from executor import ...), so main.cancel_order
+        # isn't a real module attribute to patch -- executor's own is
+        # what main.py actually re-resolves at call time.
+        with patch("main.USE_PYRAMIDING", True), patch(
+            "executor.cancel_order", side_effect=tracking_cancel_order
+        ), patch("executor.place_market_order", side_effect=tracking_place_market_order):
+            main.run_trading_cycle(exchange)
+
+        self.assertEqual(events, ["cancel", "buy"])
+
+    def test_pyramid_add_leaves_a_self_healable_state_if_the_buy_fails(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        base = SYMBOL.split("/")[0]
+        stale_stop = {"id": "stop-1", "side": "sell", "amount": 1.0, "triggerPrice": 9800.0}
+        exchange = FakeExchange(
+            candles,
+            free={base: 1.0, "USDT": 1000.0},
+            open_orders=[stale_stop],
+            trades=[{"side": "buy", "price": 10000.0, "amount": 1.0}],
+        )
+
+        with patch("main.USE_PYRAMIDING", True), patch(
+            "executor.place_market_order", side_effect=RuntimeError("simulated network failure")
+        ):
+            with self.assertRaises(RuntimeError):
+                main.run_trading_cycle(exchange)
+
+        # The old stop was already cancelled before the failed buy --
+        # no order was ever created, and no stop order survives it
+        # either. Next cycle's self-heal ("in_position and not
+        # get_open_stop_loss_orders") will see exactly zero open stops
+        # and rebuild one for the actual current balance, rather than an
+        # undersized stop nothing would ever notice needs replacing.
+        self.assertEqual(exchange.cancelled_ids, ["stop-1"])
+        self.assertEqual(exchange.created_orders, [])
+        self.assertEqual(exchange.fetch_open_orders(SYMBOL), [])
 
     def test_pyramiding_off_never_adds_a_tranche(self):
         candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
