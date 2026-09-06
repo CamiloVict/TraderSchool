@@ -325,6 +325,31 @@ class RunTradingCycleTests(unittest.TestCase):
         mock_detect.assert_not_called()
         self.assertEqual(result["action"], "buy")
 
+    def test_trend_strength_filter_blocks_entry_when_ema_separation_is_too_small(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        # An impossibly high bar no real trend_strength value could clear.
+        with patch("main.USE_TREND_STRENGTH_FILTER", True), patch(
+            "main.MIN_TREND_STRENGTH_ATR_MULTIPLE", 1_000_000.0
+        ):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "entry_blocked_by_weak_trend")
+        self.assertEqual(exchange.created_orders, [])
+
+    def test_trend_strength_filter_off_ignores_ema_separation_entirely(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        exchange = FakeExchange(candles, free={"USDT": 1000.0})
+
+        # Same impossibly-high bar as above -- off means it's never consulted.
+        with patch("main.USE_TREND_STRENGTH_FILTER", False), patch(
+            "main.MIN_TREND_STRENGTH_ATR_MULTIPLE", 1_000_000.0
+        ):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "buy")
+
     def test_blocks_a_new_entry_when_the_daily_loss_limit_is_hit(self):
         candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
         exchange = FakeExchange(candles, free={"USDT": 1000.0})

@@ -30,8 +30,12 @@ Which signal decides entries depends on config.USE_SETUP_ENGINE
     a bullish EMA 20/50 cross, exits on the cross back. If
     config.USE_PATTERN_FILTER is also on, a newly-confirmed bearish
     reversal pattern — double-top, head-and-shoulders, or triangle
-    (see patterns.py) — blocks a new entry. Purely a veto, never an
-    extra exit trigger.
+    (see patterns.py) — blocks a new entry. If config.
+    USE_TREND_STRENGTH_FILTER is also on, a crossover where the EMAs
+    are still closer than MIN_TREND_STRENGTH_ATR_MULTIPLE ATRs apart
+    ("entry_blocked_by_weak_trend" — see strategy.py's own
+    trend_strength column) blocks a new entry too. Both are purely
+    vetoes, never an extra exit trigger.
 
   - **True: Setup Engine**, in _run_setup_engine_cycle(). Replaces the
     EMA signal with context_engine's Setup Engine — currently
@@ -102,6 +106,7 @@ from config import (
     BINANCE_API_KEY,
     CONTEXT_HISTORY_DAYS,
     MAX_CONSECUTIVE_LOSSES,
+    MIN_TREND_STRENGTH_ATR_MULTIPLE,
     RISK_PER_TRADE_PCT,
     SYMBOL,
     TIMEFRAME,
@@ -109,6 +114,7 @@ from config import (
     USE_SETUP_ENGINE,
     USE_STRUCTURAL_STOP,
     USE_TESTNET,
+    USE_TREND_STRENGTH_FILTER,
 )
 from balance_snapshot import record_balance
 from daily_loss_state import load_or_init_starting_capital
@@ -332,6 +338,7 @@ def _run_ema_cycle(exchange) -> dict:
     consecutive_losses_count = None
 
     entry_blocked_by_pattern = False
+    entry_blocked_by_weak_trend = False
     daily_loss_limit_hit = False
     weekly_loss_limit_hit = False
     consecutive_losses_hit = False
@@ -342,6 +349,8 @@ def _run_ema_cycle(exchange) -> dict:
             entry_blocked_by_pattern = bool(
                 bearish_veto_mask(pattern_signal, PATTERN_VETO_LOOKBACK).iloc[-1]
             )
+        if USE_TREND_STRENGTH_FILTER:
+            entry_blocked_by_weak_trend = bool(latest["trend_strength"] < MIN_TREND_STRENGTH_ATR_MULTIPLE)
         quote_balance = get_quote_asset_balance(exchange, SYMBOL)
         equity = quote_balance + total_balance * price
         daily_loss_limit_hit, daily_loss_pct = _daily_loss_limit_hit(equity)
@@ -353,6 +362,7 @@ def _run_ema_cycle(exchange) -> dict:
         signal == 1
         and not in_position
         and not entry_blocked_by_pattern
+        and not entry_blocked_by_weak_trend
         and not daily_loss_limit_hit
         and not weekly_loss_limit_hit
         and not consecutive_losses_hit
@@ -382,6 +392,8 @@ def _run_ema_cycle(exchange) -> dict:
             action = "entry_blocked_by_stop_distance"
     elif signal == 1 and not in_position and entry_blocked_by_pattern:
         action = "entry_blocked_by_pattern"
+    elif signal == 1 and not in_position and entry_blocked_by_weak_trend:
+        action = "entry_blocked_by_weak_trend"
     elif signal == 1 and not in_position and daily_loss_limit_hit:
         action = "entry_blocked_by_daily_loss_limit"
     elif signal == 1 and not in_position and weekly_loss_limit_hit:
@@ -424,6 +436,7 @@ def _run_ema_cycle(exchange) -> dict:
             size=size,
             size_reject_reason=size_reject_reason,
             stop_distance_reject_reason=stop_distance_reject_reason,
+            trend_strength=float(latest["trend_strength"]),
             daily_loss_pct=daily_loss_pct,
             weekly_loss_pct=weekly_loss_pct,
             consecutive_losses_count=consecutive_losses_count,
@@ -451,6 +464,7 @@ def _ema_action_reason(
     size,
     size_reject_reason,
     stop_distance_reject_reason,
+    trend_strength,
     daily_loss_pct,
     weekly_loss_pct,
     consecutive_losses_count,
@@ -468,6 +482,12 @@ def _ema_action_reason(
         return "EMA fast crossed back below slow while in position -- signal exit"
     if action == "entry_blocked_by_pattern":
         return "EMA signal is bullish, but a confirmed bearish chart pattern is vetoing new entries"
+    if action == "entry_blocked_by_weak_trend":
+        return (
+            f"EMA signal is bullish, but the EMAs are only {trend_strength:.2f} ATRs apart "
+            f"(< MIN_TREND_STRENGTH_ATR_MULTIPLE={MIN_TREND_STRENGTH_ATR_MULTIPLE}) -- too weak a "
+            "trend to trust the crossover"
+        )
     if action == "entry_blocked_by_daily_loss_limit":
         return f"EMA signal is bullish, but today's realized loss ({daily_loss_pct:.2f}%) has hit MAX_DAILY_LOSS_PCT"
     if action == "entry_blocked_by_weekly_loss_limit":

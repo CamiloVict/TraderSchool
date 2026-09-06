@@ -423,6 +423,38 @@ descuentan comisiones reales (Resta et al. 2020, Frömmel & Deprez
 2024). Por eso: patrón como veto sobre una entrada ya validada por
 EMA, no como estrategia propia.
 
+## Filtro de fuerza de tendencia (`strategy.py`, opt-in)
+
+```bash
+python backtester.py --source real --days 365 --trend-strength-filter
+python backtester.py --source real --days 365 --trend-strength-filter --min-trend-strength 1.5
+```
+
+`strategy.add_signals()` calcula `trend_strength = |ema_fast - ema_slow| /
+ATR` para cada vela: qué tan separadas están realmente las dos EMAs en
+el momento del cruce, en unidades de volatilidad, no solo si cruzaron
+o no. Un cruce con las EMAs todavía prácticamente pegadas es lo que
+produce un mercado en rango/choppy — el precio oscila cruzando ambas
+medias sin una tendencia real detrás, generando una señal que se
+revierte unas velas después (whipsaw) y, en PAXG, se come la comisión
+del round-trip sin ganar nada a cambio. Con `USE_TREND_STRENGTH_FILTER`
+(o `--trend-strength-filter`) activo, una entrada nueva se bloquea si
+`trend_strength` está por debajo de `MIN_TREND_STRENGTH_ATR_MULTIPLE`
+(`--min-trend-strength`, default `1.0`, sin calibrar contra datos
+reales todavía) — acción `entry_blocked_by_weak_trend` en
+`main.py --trade`. Igual que el filtro de patrones: puro veto sobre
+entradas, nunca fuerza una salida, apagado por defecto.
+
+Se descartó ADX (el indicador clásico de "fuerza de tendencia") porque
+`context_engine/features.py` no tiene una implementación propia — para
+esta primera versión, EMA-distancia-sobre-ATR reusa exactamente los
+mismos dos primitivos (`ema_fast`/`ema_slow`, ya calculados; `atr()`,
+ya usado por `validate_stop_distance()` y el stop estructural) en vez
+de sumar un indicador nuevo. **No aplica al bot de BTC**
+(`scalping_backtester.py`): esa estrategia entra por RSI/rango, no por
+cruce de EMA, así que no genera ni consume una columna `trend_strength`
+— ver la sección de BTC más abajo para su propio diagnóstico.
+
 ## Daily Market Context Engine (`context_engine/`)
 
 ```bash
@@ -840,6 +872,24 @@ Sigue sin haber backend: todo sale de JSON estáticos en
   defecto) no se achica junto con él — esto es una barrera de
   seguridad contra un stop roto, no un filtro de calidad de estrategia
   pensado para cuestionar la distancia ya probada del stop plano
+- [x] `strategy.add_signals()` + `USE_TREND_STRENGTH_FILTER` /
+  `MIN_TREND_STRENGTH_ATR_MULTIPLE` / `backtester.py --trend-strength-filter`:
+  nueva columna `trend_strength` = separación entre EMA rápida y lenta,
+  normalizada por ATR — qué tan lejos están realmente las dos EMAs en
+  el momento del cruce, no solo si cruzaron o no. Un cruce con las EMAs
+  todavía prácticamente pegadas es exactamente lo que produce un
+  mercado en rango/choppy — el precio oscila cruzando ambas medias sin
+  una tendencia real detrás, generando una señal que se revierte unas
+  velas después (whipsaw), comiéndose la comisión del round-trip sin
+  ganar nada en PAXG. Opt-in y apagado por defecto, mismo trato que
+  `USE_PATTERN_FILTER`: solo veta entradas nuevas, nunca fuerza una
+  salida. Conectado en `backtester.py` (`_simulate`, `run_backtest`,
+  `export_report`, CLI `--trend-strength-filter`/`--min-trend-strength`)
+  y en `main.py --trade`'s `_run_ema_cycle()` (acción
+  `entry_blocked_by_weak_trend`). **No aplica al bot de BTC**
+  (`scalping_backtester.py`): esa estrategia es RSI/rango, no cruce de
+  EMA, así que no tiene una columna `trend_strength` que consultar —
+  ver la sección de BTC más abajo para su propio diagnóstico
 - [x] `executor.meets_exchange_minimums()`: `risk_manager.position_size()`
   es matemática de riesgo pura, sin idea de los filtros propios de
   Binance (`LOT_SIZE`/`MIN_NOTIONAL`) — una posición bien dimensionada

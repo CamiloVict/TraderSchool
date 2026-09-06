@@ -36,6 +36,15 @@ Assumptions (deliberate simplifications, worth knowing about):
     strategy, and its edge usually comes from letting a winning trade
     run to its own signal exit rather than capping it at a fixed
     target.
+  - `use_trend_strength_filter=True` (config.USE_TREND_STRENGTH_FILTER,
+    or CLI `--trend-strength-filter`) blocks a new EMA-crossover entry
+    unless strategy.py's own trend_strength column (EMA separation, in
+    ATRs) is at least `min_trend_strength` (default
+    config.MIN_TREND_STRENGTH_ATR_MULTIPLE). Targets the same root
+    cause as the pattern filter from a different angle: a crossover
+    where the EMAs are still right on top of each other is what a
+    ranging/choppy market produces, and tends to whipsaw. Off by
+    default -- an opt-in experiment, not a validated edge.
   - CLI `--walk-forward N`: runs the same, unchanged config across N
     contiguous historical segments instead of one pass over the whole
     window, and prints a per-segment comparison (see
@@ -50,7 +59,13 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
-from config import RISK_PER_TRADE_PCT, STOP_LOSS_PCT, TAKE_PROFIT_PCT, TAKER_FEE_PCT
+from config import (
+    MIN_TREND_STRENGTH_ATR_MULTIPLE,
+    RISK_PER_TRADE_PCT,
+    STOP_LOSS_PCT,
+    TAKE_PROFIT_PCT,
+    TAKER_FEE_PCT,
+)
 from patterns import PATTERN_VETO_LOOKBACK, bearish_veto_mask, detect_reversal_patterns
 from risk_manager import position_size, stop_loss_price, structural_stop_price, take_profit_price
 from strategy import FAST_PERIOD, SLOW_PERIOD, add_signals
@@ -64,6 +79,8 @@ def _simulate(
     use_pattern_filter: bool = False,
     use_structural_stop: bool = False,
     use_take_profit: bool = False,
+    use_trend_strength_filter: bool = False,
+    min_trend_strength: float = None,
 ):
     """Core simulation loop, shared by run_backtest() and export_report().
 
@@ -72,6 +89,13 @@ def _simulate(
     head-and-shoulders, descending/symmetric triangle) blocks new
     EMA-crossover entries for PATTERN_VETO_LOOKBACK candles. It only
     gates entries; exits (signal or stop-loss) are unaffected.
+
+    `use_trend_strength_filter`: opt-in confirmation filter using
+    strategy.py's own `trend_strength` column (EMA separation, in
+    ATRs) — blocks a new EMA-crossover entry unless it's at least
+    `min_trend_strength` (defaults to config.MIN_TREND_STRENGTH_ATR_MULTIPLE
+    when None). Only gates entries; exits are unaffected, same as the
+    pattern filter above.
 
     `use_take_profit`: opt-in flat target at risk_manager.
     take_profit_price() (TAKE_PROFIT_PCT), checked against the
@@ -105,6 +129,10 @@ def _simulate(
 
     warmup = slow if slow is not None else SLOW_PERIOD
     data = data.iloc[warmup:].copy()
+
+    trend_strength_threshold = (
+        min_trend_strength if min_trend_strength is not None else MIN_TREND_STRENGTH_ATR_MULTIPLE
+    )
 
     if use_pattern_filter:
         data["pattern_signal"] = detect_reversal_patterns(data)
@@ -180,7 +208,12 @@ def _simulate(
             stop_price = None
             target_price = None
             size = 0.0
-        elif position == 0 and signal == 1 and not entry_blocked.loc[timestamp]:
+        elif (
+            position == 0
+            and signal == 1
+            and not entry_blocked.loc[timestamp]
+            and (not use_trend_strength_filter or row["trend_strength"] >= trend_strength_threshold)
+        ):
             if use_structural_stop:
                 candidate_stop = structural_stop_price(data.loc[:timestamp], price)
             else:
@@ -479,6 +512,8 @@ def run_backtest(
     use_pattern_filter: bool = False,
     use_structural_stop: bool = False,
     use_take_profit: bool = False,
+    use_trend_strength_filter: bool = False,
+    min_trend_strength: float = None,
 ) -> dict:
     """Simulate the EMA-crossover strategy over `df` and return metrics.
 
@@ -486,7 +521,15 @@ def run_backtest(
     data_fetcher.fetch_ohlcv / fetch_ohlcv_history).
     """
     metrics, _, _ = _simulate(
-        df, initial_capital, fast, slow, use_pattern_filter, use_structural_stop, use_take_profit
+        df,
+        initial_capital,
+        fast,
+        slow,
+        use_pattern_filter,
+        use_structural_stop,
+        use_take_profit,
+        use_trend_strength_filter,
+        min_trend_strength,
     )
     return metrics
 
@@ -503,13 +546,23 @@ def export_report(
     use_pattern_filter: bool = False,
     use_structural_stop: bool = False,
     use_take_profit: bool = False,
+    use_trend_strength_filter: bool = False,
+    min_trend_strength: float = None,
 ) -> dict:
     """Run the backtest and write a JSON report the React dashboard reads:
     metrics, per-candle OHLC/EMA/signal/equity, and the trade list.
     Returns the same dict that's written to disk.
     """
     metrics, data, trades = _simulate(
-        df, initial_capital, fast, slow, use_pattern_filter, use_structural_stop, use_take_profit
+        df,
+        initial_capital,
+        fast,
+        slow,
+        use_pattern_filter,
+        use_structural_stop,
+        use_take_profit,
+        use_trend_strength_filter,
+        min_trend_strength,
     )
 
     candles = [
@@ -524,6 +577,7 @@ def export_report(
             "ema_slow": float(row["ema_slow"]),
             "signal": int(row["signal"]),
             "pattern_signal": int(row["pattern_signal"]),
+            "trend_strength": float(row["trend_strength"]),
             "equity": float(row["equity"]),
             "drawdown_pct": float(row["drawdown_pct"]),
         }
@@ -548,6 +602,12 @@ def export_report(
             "take_profit_simulated": use_take_profit,
             "pattern_filter_enabled": use_pattern_filter,
             "pattern_veto_lookback_candles": PATTERN_VETO_LOOKBACK if use_pattern_filter else None,
+            "trend_strength_filter_enabled": use_trend_strength_filter,
+            "min_trend_strength_atr_multiple": (
+                (min_trend_strength if min_trend_strength is not None else MIN_TREND_STRENGTH_ATR_MULTIPLE)
+                if use_trend_strength_filter
+                else None
+            ),
             "stop_priced_off": "structural (last swing low, ATR-buffered)" if use_structural_stop else "flat stop_loss_pct",
         },
         "metrics": metrics,
@@ -629,6 +689,26 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--trend-strength-filter",
+        action="store_true",
+        help=(
+            "Opt-in trend-strength confirmation filter (config."
+            "USE_TREND_STRENGTH_FILTER): blocks a new EMA-crossover entry "
+            "unless the EMAs are at least --min-trend-strength ATRs apart. "
+            "Off by default."
+        ),
+    )
+    parser.add_argument(
+        "--min-trend-strength",
+        type=float,
+        default=None,
+        metavar="ATR_MULTIPLE",
+        help=(
+            "Threshold for --trend-strength-filter, in ATRs of EMA "
+            "separation. Defaults to config.MIN_TREND_STRENGTH_ATR_MULTIPLE."
+        ),
+    )
+    parser.add_argument(
         "--walk-forward",
         type=int,
         metavar="N",
@@ -671,6 +751,8 @@ if __name__ == "__main__":
                 use_pattern_filter=args.pattern_filter,
                 use_structural_stop=args.structural_stop,
                 use_take_profit=args.take_profit,
+                use_trend_strength_filter=args.trend_strength_filter,
+                min_trend_strength=args.min_trend_strength,
             )
             segment_returns.append(segment_metrics["total_return_pct"])
             print(
@@ -699,6 +781,8 @@ if __name__ == "__main__":
                 use_pattern_filter=args.pattern_filter,
                 use_structural_stop=args.structural_stop,
                 use_take_profit=args.take_profit,
+                use_trend_strength_filter=args.trend_strength_filter,
+                min_trend_strength=args.min_trend_strength,
             )
             metrics = report["metrics"]
             print(f"Report written to {args.export}")
@@ -708,6 +792,8 @@ if __name__ == "__main__":
                 use_pattern_filter=args.pattern_filter,
                 use_structural_stop=args.structural_stop,
                 use_take_profit=args.take_profit,
+                use_trend_strength_filter=args.trend_strength_filter,
+                min_trend_strength=args.min_trend_strength,
             )
 
         for key, value in metrics.items():

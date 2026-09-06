@@ -364,5 +364,51 @@ class PatternFilterWiringTests(unittest.TestCase):
         self.assertTrue((data["equity"] != 1000.0).any())  # entry happened normally
 
 
+class TrendStrengthFilterWiringTests(unittest.TestCase):
+    """Verifies _simulate() actually wires strategy.py's trend_strength
+    column into the entry check. The column's own arithmetic is
+    exercised implicitly here (no separate strategy.py test module
+    exists yet) since it's simple enough to reason about directly:
+    |ema_fast - ema_slow| / ATR, always non-negative."""
+
+    def test_an_impossibly_high_threshold_blocks_every_entry(self):
+        warmup = [100.0] * (SLOW_PERIOD + 5)
+        rise = [100.0 + i for i in range(1, 31)]  # would trigger an EMA entry
+        df = make_df(warmup + rise)
+
+        _, data, trades = _simulate(
+            df, initial_capital=1000.0, use_trend_strength_filter=True, min_trend_strength=1_000_000.0
+        )
+
+        self.assertEqual(trades, [])
+        self.assertTrue((data["equity"] == 1000.0).all())
+
+    def test_a_trivially_low_threshold_lets_the_normal_entry_through(self):
+        warmup = [100.0] * (SLOW_PERIOD + 5)
+        rise = [100.0 + i for i in range(1, 31)]
+        df = make_df(warmup + rise)
+
+        _, data, _ = _simulate(
+            df, initial_capital=1000.0, use_trend_strength_filter=True, min_trend_strength=0.0
+        )
+
+        self.assertTrue((data["equity"] != 1000.0).any())
+
+    def test_filter_off_ignores_an_otherwise_blocking_threshold(self):
+        # Same scenario and the same impossibly-high min_trend_strength
+        # as test_an_impossibly_high_threshold_blocks_every_entry above --
+        # only difference is use_trend_strength_filter=False. Proves the
+        # flag itself gates the check, not just min_trend_strength's value.
+        warmup = [100.0] * (SLOW_PERIOD + 5)
+        rise = [100.0 + i for i in range(1, 31)]
+        df = make_df(warmup + rise)
+
+        _, data, _ = _simulate(
+            df, initial_capital=1000.0, use_trend_strength_filter=False, min_trend_strength=1_000_000.0
+        )
+
+        self.assertTrue((data["equity"] != 1000.0).any())
+
+
 if __name__ == "__main__":
     unittest.main()

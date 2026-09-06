@@ -114,6 +114,26 @@ STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE = float(os.getenv("STRUCTURAL_STOP_ATR_BUFFE
 # stand-alone strategy).
 USE_PATTERN_FILTER = os.getenv("USE_PATTERN_FILTER", "false").strip().lower() == "true"
 
+# --- Trend-strength confirmation filter (see strategy.py) ------------------
+# Opt-in, off by default: when True, a fresh EMA crossover is only taken
+# if strategy.py's own trend_strength (|ema_fast - ema_slow| / ATR) is at
+# least MIN_TREND_STRENGTH_ATR_MULTIPLE. The EMAs crossing is necessary
+# but not sufficient evidence of a real trend -- a ranging/choppy market
+# produces the same crossover with the two EMAs still right on top of
+# each other, which tends to reverse again a few candles later (a
+# whipsaw) and, on PAXG, eats the round-trip fee for nothing. Purely a
+# veto on entries -- never forces an exit, never generates its own
+# trades. Same "off until deliberately backtested" posture as
+# USE_STRUCTURAL_STOP/USE_PATTERN_FILTER: this changes what actually
+# places orders.
+USE_TREND_STRENGTH_FILTER = os.getenv("USE_TREND_STRENGTH_FILTER", "false").strip().lower() == "true"
+# Minimum trend_strength (EMA separation, in ATRs) required to take a
+# crossover entry when USE_TREND_STRENGTH_FILTER is on. Placeholder
+# default -- backtest it for the SYMBOL/TIMEFRAME you actually run
+# before trusting it; there's no live data in this sandbox to calibrate
+# against.
+MIN_TREND_STRENGTH_ATR_MULTIPLE = float(os.getenv("MIN_TREND_STRENGTH_ATR_MULTIPLE", "1.0"))
+
 # --- Setup Engine / Daily Market Context (see context_engine/) ------------
 # Opt-in, off by default: when True, main.py --trade replaces the EMA
 # crossover with context_engine's Setup Engine (LIQUIDITY_SWEEP_RECLAIM
