@@ -115,18 +115,22 @@ STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE = float(os.getenv("STRUCTURAL_STOP_ATR_BUFFE
 USE_PATTERN_FILTER = os.getenv("USE_PATTERN_FILTER", "false").strip().lower() == "true"
 
 # --- Trend-strength confirmation filter (see strategy.py) ------------------
-# Opt-in, off by default: when True, a fresh EMA crossover is only taken
-# if strategy.py's own trend_strength (|ema_fast - ema_slow| / ATR) is at
-# least MIN_TREND_STRENGTH_ATR_MULTIPLE. The EMAs crossing is necessary
-# but not sufficient evidence of a real trend -- a ranging/choppy market
-# produces the same crossover with the two EMAs still right on top of
-# each other, which tends to reverse again a few candles later (a
-# whipsaw) and, on PAXG, eats the round-trip fee for nothing. Purely a
-# veto on entries -- never forces an exit, never generates its own
-# trades. Same "off until deliberately backtested" posture as
-# USE_STRUCTURAL_STOP/USE_PATTERN_FILTER: this changes what actually
-# places orders.
-USE_TREND_STRENGTH_FILTER = os.getenv("USE_TREND_STRENGTH_FILTER", "false").strip().lower() == "true"
+# On by default (unlike USE_STRUCTURAL_STOP/USE_PATTERN_FILTER, which
+# stay off pending backtest evidence this filter now has): when True, a
+# fresh EMA crossover is only taken if strategy.py's own trend_strength
+# (|ema_fast - ema_slow| / ATR) is at least MIN_TREND_STRENGTH_ATR_MULTIPLE.
+# The EMAs crossing is necessary but not sufficient evidence of a real
+# trend -- a ranging/choppy market produces the same crossover with the
+# two EMAs still right on top of each other, which tends to reverse
+# again a few candles later (a whipsaw) and, on PAXG, eats the
+# round-trip fee for nothing. Purely a veto on entries -- never forces
+# an exit, never generates its own trades. Turned on after backtesting
+# against 365 real days of PAXG/USDT 1h (see README): at
+# MIN_TREND_STRENGTH_ATR_MULTIPLE's own default of 1.5, Sharpe
+# 0.99->1.09, profit factor 1.39->1.89, max drawdown -12.17%->-8.12%,
+# for a small cost in raw return (8.50%->7.80%). Set to "false" in
+# .env to go back to the raw EMA crossover with no trend confirmation.
+USE_TREND_STRENGTH_FILTER = os.getenv("USE_TREND_STRENGTH_FILTER", "true").strip().lower() == "true"
 # Minimum trend_strength (EMA separation, in ATRs) required to take a
 # crossover entry when USE_TREND_STRENGTH_FILTER is on. Backtested
 # against 365 real days of PAXG/USDT 1h (see README's own section on

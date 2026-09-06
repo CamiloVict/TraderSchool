@@ -433,7 +433,7 @@ descuentan comisiones reales (Resta et al. 2020, Frömmel & Deprez
 2024). Por eso: patrón como veto sobre una entrada ya validada por
 EMA, no como estrategia propia.
 
-## Filtro de fuerza de tendencia (`strategy.py`, opt-in)
+## Filtro de fuerza de tendencia (`strategy.py`, encendido por defecto)
 
 ```bash
 python backtester.py --source real --days 365 --trend-strength-filter
@@ -447,13 +447,15 @@ o no. Un cruce con las EMAs todavía prácticamente pegadas es lo que
 produce un mercado en rango/choppy — el precio oscila cruzando ambas
 medias sin una tendencia real detrás, generando una señal que se
 revierte unas velas después (whipsaw) y, en PAXG, se come la comisión
-del round-trip sin ganar nada a cambio. Con `USE_TREND_STRENGTH_FILTER`
-(o `--trend-strength-filter`) activo, una entrada nueva se bloquea si
-`trend_strength` está por debajo de `MIN_TREND_STRENGTH_ATR_MULTIPLE`
-(`--min-trend-strength`, default `1.5`) — acción
-`entry_blocked_by_weak_trend` en `main.py --trade`. Igual que el
-filtro de patrones: puro veto sobre entradas, nunca fuerza una salida,
-apagado por defecto.
+del round-trip sin ganar nada a cambio. `USE_TREND_STRENGTH_FILTER`
+está **encendido por defecto** (a diferencia de `USE_PATTERN_FILTER`/
+`USE_STRUCTURAL_STOP`, que siguen apagados a la espera de su propio
+backtest): una entrada nueva se bloquea si `trend_strength` está por
+debajo de `MIN_TREND_STRENGTH_ATR_MULTIPLE` (`--min-trend-strength`,
+default `1.5`) — acción `entry_blocked_by_weak_trend` en
+`main.py --trade`. Puro veto sobre entradas, nunca fuerza una salida.
+Para volver al cruce de EMA sin confirmación de tendencia, poné
+`USE_TREND_STRENGTH_FILTER=false` en `.env`.
 
 **Backtest real (PAXG/USDT 1h, 365 días) que calibró el default:**
 
@@ -919,9 +921,10 @@ Sigue sin haber backend: todo sale de JSON estáticos en
   mercado en rango/choppy — el precio oscila cruzando ambas medias sin
   una tendencia real detrás, generando una señal que se revierte unas
   velas después (whipsaw), comiéndose la comisión del round-trip sin
-  ganar nada en PAXG. Opt-in y apagado por defecto, mismo trato que
-  `USE_PATTERN_FILTER`: solo veta entradas nuevas, nunca fuerza una
-  salida. Conectado en `backtester.py` (`_simulate`, `run_backtest`,
+  ganar nada en PAXG. **Encendido por defecto** (backtesteado contra
+  365 días reales de PAXG, a diferencia de `USE_PATTERN_FILTER`/
+  `USE_STRUCTURAL_STOP`, que siguen apagados): solo veta entradas
+  nuevas, nunca fuerza una salida. Conectado en `backtester.py` (`_simulate`, `run_backtest`,
   `export_report`, CLI `--trend-strength-filter`/`--min-trend-strength`)
   y en `main.py --trade`'s `_run_ema_cycle()` (acción
   `entry_blocked_by_weak_trend`). **No aplica al bot de BTC**

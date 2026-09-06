@@ -27,15 +27,16 @@ Which signal decides entries depends on config.USE_SETUP_ENGINE
 (default False — see config.py for why it's opt-in):
 
   - **False (default): EMA crossover**, in _run_ema_cycle(). Enters on
-    a bullish EMA 20/50 cross, exits on the cross back. If
-    config.USE_PATTERN_FILTER is also on, a newly-confirmed bearish
-    reversal pattern — double-top, head-and-shoulders, or triangle
-    (see patterns.py) — blocks a new entry. If config.
-    USE_TREND_STRENGTH_FILTER is also on, a crossover where the EMAs
-    are still closer than MIN_TREND_STRENGTH_ATR_MULTIPLE ATRs apart
-    ("entry_blocked_by_weak_trend" — see strategy.py's own
-    trend_strength column) blocks a new entry too. Both are purely
-    vetoes, never an extra exit trigger.
+    a bullish EMA 20/50 cross, exits on the cross back. config.
+    USE_TREND_STRENGTH_FILTER is on by default (backtested, see
+    README): a crossover where the EMAs are still closer than
+    MIN_TREND_STRENGTH_ATR_MULTIPLE ATRs apart is a likely whipsaw and
+    gets blocked ("entry_blocked_by_weak_trend" — see strategy.py's own
+    trend_strength column). If config.USE_PATTERN_FILTER is also on
+    (off by default, unlike the trend filter), a newly-confirmed
+    bearish reversal pattern — double-top, head-and-shoulders, or
+    triangle (see patterns.py) — blocks a new entry too. Both are
+    purely vetoes, never an extra exit trigger.
 
   - **True: Setup Engine**, in _run_setup_engine_cycle(). Replaces the
     EMA signal with context_engine's Setup Engine — currently
