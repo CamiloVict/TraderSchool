@@ -787,6 +787,42 @@ estructura/liquidez con la vela nueva en vez de recalcular todo desde
 cero), que es un cambio bastante más grande y riesgoso — toca justo el
 código que más cuidado tiene con el look-ahead.
 
+**Primer resultado real (PAXG/USDT 1h, 270 días, ventana de contexto de
+90 días, corrido 2026-09-06)**, buscando si el Setup Engine podía ser
+una vía para más rentabilidad que el bot EMA ya en producción:
+
+```
+total_return_pct: -2.56    buy_hold_return_pct: -14.26
+num_trades: 9               win_rate_pct: 22.22
+sharpe_ratio: -2.85         profit_factor: 0.16
+max_drawdown_pct: -2.59     avg_trade_duration_hours: 6.00
+stop_loss_exits: 1          signal_exits: 8
+```
+
+Le ganó al buy-and-hold, pero no por mérito: PAXG cayó fuerte en esta
+ventana (-14.26%) y una estrategia que casi no opera (9 trades en 270
+días, 6 horas de duración promedio) le gana casi por default a
+comprar-y-mantener en un mercado bajista, solo por estar poco expuesta.
+Los números que sí importan son malos: `profit_factor 0.16` (por cada
+$1 ganado se perdieron ~$6.25), `win_rate 22.22%`, `sharpe -2.85` —
+bastante peor que cualquier configuración del bot EMA vista esta
+sesión, incluidos sus peores tramos de walk-forward. Dato curioso: solo
+1 de 9 salidas fue por stop-loss; las otras 8 fueron por la propia
+lógica del motor (el bias deja de sostener la posición, o el contexto
+pasa a `no_trade`) — entra y sale rápido por cambios de contexto, no
+por el precio moviéndose en contra.
+
+**Veredicto, con la salvedad de siempre sobre el tamaño de muestra** (9
+operaciones es poco para sacar una conclusión definitiva, a diferencia
+del patrón de BTC scalping que se confirmó en tres ventanas
+independientes): esta primera corrida real **no respalda** usar el
+Setup Engine como palanca de rentabilidad — es más caro de correr
+(~13 minutos por corrida) y peor en casi todas las métricas que la
+configuración EMA ya validada y en producción. No se declara retirado
+como BTC scalping (falta el walk-forward que sí se le hizo a ese), pero
+tampoco es el próximo paso recomendado sin evidencia adicional que
+cambie esta lectura.
+
 ### Versionado
 
 Dos versiones separadas, porque cambian por motivos distintos:
