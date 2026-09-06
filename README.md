@@ -991,6 +991,81 @@ python -m unittest test_context_validation test_context_structure \
 
 O toda la suite del repo (212 tests) con `python -m unittest discover`.
 
+## Forex (experimental, `forex_data_fetcher.py` — solo datos, sin estrategia ni órdenes)
+
+**PAXG (lo que ya opera este bot) no es lo mismo que XAU/USD (lo que opera forex).**
+PAXG es un token (Paxos, ERC-20 y otras redes) respaldado 1:1 por oro
+físico real en bóvedas de Brink's, canjeable por oro/efectivo, que
+cotiza en exchanges cripto como Binance **24/7 incluidos fines de
+semana**. XAU/USD es el spot de oro tradicional, operado OTC entre
+bancos o vía futuros/CFDs, **23/5** (cierra el fin de semana). El
+arbitraje los mantiene cerca uno del otro, pero no idénticos tick a
+tick — y como PAXG sigue cotizando en Binance el fin de semana sin que
+el mercado real de oro esté abierto para arbitrar, el precio de fin de
+semana se mueve solo por oferta/demanda dentro del propio exchange
+cripto, con menos liquidez. Es un candidato real para parte del
+comportamiento errático que ya vimos pelear con el filtro de tendencia.
+
+**Por qué OANDA como bróker**: a diferencia de Binance, Forex no tiene
+un estándar tipo ccxt — cada bróker es su propia integración. Este
+repo corre 100% headless (cron, sin terminal gráfica abierta), así que
+la única opción que encaja sin agregar infraestructura nueva es una
+API REST pura por HTTPS: OANDA (`api-fxpractice.oanda.com` para
+cuentas demo). MetaTrader 4/5 (probablemente lo que usa tu trader
+personal) e Interactive Brokers requieren una terminal corriendo todo
+el tiempo (típicamente Windows para MT4/5) — no encajan con este cron
+en tu Mac sin sumar una máquina/entorno aparte.
+
+**Qué existe hoy**: `forex_config.py` (credenciales/símbolo, mismo
+patrón de env vars con default seguro que `config.py`) y
+`forex_data_fetcher.py` (velas históricas vía la API v20 de OANDA,
+paginado, con reintentos ante fallos transitorios de red — el
+equivalente de `data_fetcher.py` pero para OANDA). Con tests
+(`test_forex_data_fetcher.py`, 12 tests, todos con `requests.get`
+mockeado — sin red real). Nueva pestaña "Forex (XAU/USD)" en el
+dashboard, con su propio panel (`ComingSoonPanel.jsx`) en vez de
+reusar `AssetPanel` — ese componente asume un bot corriendo contra
+Binance Testnet ("en vivo contra Testnet" en su propio header), que
+acá directamente no aplica.
+
+**Qué NO existe todavía, a propósito** (una cosa a la vez, mismo
+criterio que el resto de esta sesión): ninguna estrategia para Forex,
+ningún backtester, ninguna colocación de órdenes (`forex_executor.py`
+no existe), nada conectado a ningún ciclo de trading en vivo. Escribir
+lógica de órdenes sin poder probarla contra una cuenta real (ni
+siquiera demo) sería exactamente el tipo de código sin validar que
+esta sesión evitó todo el tiempo con el bot de PAXG/BTC.
+
+**Sin verificar contra una cuenta real todavía**: `forex_data_fetcher.py`
+está escrito directo desde la documentación pública de la API v20 de
+OANDA (estable, bien documentada), no probado end-to-end — no hay
+acceso a red desde este entorno de desarrollo hacia nada que no sea la
+API pública de Binance. Antes de confiar en él:
+
+1. Crear una cuenta **practice** (demo, gratis) en OANDA y generar un
+   personal access token (`Account → My Services → Manage API Access`
+   en su sitio).
+2. Agregar a `.env`:
+   ```
+   OANDA_API_TOKEN=tu-token-aca
+   OANDA_ENVIRONMENT=practice
+   ```
+3. Correr, para confirmar que la respuesta real de OANDA calza con lo
+   que este código espera:
+   ```bash
+   python3.9 -c "
+   from forex_data_fetcher import fetch_candles
+   df = fetch_candles('XAU_USD', granularity='H1', count=10)
+   print(df)
+   "
+   ```
+   Si esto tira un error o un formato inesperado, es un bug en
+   `forex_data_fetcher.py` a corregir contra la respuesta real, no en
+   la documentación de la que se escribió.
+4. Recién con eso funcionando: decidir una estrategia para Forex y
+   construir su backtester — ningún paso de acá en adelante existe
+   todavía.
+
 ## Dashboard (React)
 
 ```bash
@@ -1016,7 +1091,12 @@ Tiene una pestaña por bot/símbolo (hoy: Oro/PAXG y BTC) — cada uno
 corre como un cron separado, con sus propios archivos de estado, así
 que nunca se mezcla la posición o el historial de uno con el del otro.
 Agregar un símbolo nuevo es agregar una entrada a `TABS` en
-`dashboard/src/App.jsx` con sus tres rutas de datos.
+`dashboard/src/App.jsx` con sus tres rutas de datos. Una tercera
+pestaña, "Forex (XAU/USD)" (ver la sección propia de Forex más arriba),
+usa `comingSoon: true` en vez de esas tres rutas — renderiza
+`ComingSoonPanel` en lugar de `AssetPanel`, porque ese componente da
+por sentado un bot corriendo contra Binance Testnet que acá todavía no
+existe.
 
 Sigue sin haber backend: todo sale de JSON estáticos en
 `dashboard/public/data/`.
