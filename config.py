@@ -102,6 +102,40 @@ USE_STRUCTURAL_STOP = os.getenv("USE_STRUCTURAL_STOP", "false").strip().lower() 
 # risk_manager.structural_stop_price's own docstring).
 STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE = float(os.getenv("STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE", "0.2"))
 
+# --- Pyramiding: adding to an already-open position (see risk_manager.py) --
+# Opt-in, off by default -- same "backtest it first" posture as
+# USE_STRUCTURAL_STOP/USE_PATTERN_FILTER: this changes position sizing
+# and stop management for an already-live order, not just an entry veto.
+# When True, an already-open long can get ONE additional tranche (see
+# MAX_PYRAMID_ENTRIES) if price has moved at least
+# PYRAMID_TRIGGER_ATR_MULTIPLE ATRs beyond the last entry while the EMA
+# signal is still bullish -- i.e. only adds to a trend that's still
+# confirming itself, never to a stalling or reversing one. The stop for
+# the whole position is recalculated (not left at the original tranche's
+# level) once a new tranche is added, so pyramiding also locks in some
+# of the first tranche's paper gain instead of just adding exposure.
+USE_PYRAMIDING = os.getenv("USE_PYRAMIDING", "false").strip().lower() == "true"
+# Max additional tranches per position (so total tranches = 1 + this).
+# Deliberately capped low by default -- pyramiding without a cap can
+# turn a single bad reversal into far more than RISK_PER_TRADE_PCT lost,
+# the opposite of what risk_manager.py is for.
+MAX_PYRAMID_ENTRIES = int(os.getenv("MAX_PYRAMID_ENTRIES", "1"))
+# How many ATRs price must move beyond the previous tranche's entry
+# before another tranche is added. Placeholder -- backtest it for the
+# SYMBOL/TIMEFRAME you actually run before trusting it.
+PYRAMID_TRIGGER_ATR_MULTIPLE = float(os.getenv("PYRAMID_TRIGGER_ATR_MULTIPLE", "1.5"))
+# % of capital risked on an add-on tranche, sized the same way
+# RISK_PER_TRADE_PCT sizes a fresh entry (see risk_manager.position_size's
+# own risk_pct parameter). Deliberately half of RISK_PER_TRADE_PCT by
+# default, not the same: a full second helping of risk on top of an
+# already-open position doubles worst-case loss on one reversal without
+# a corresponding edge to justify it -- that's added variance, not
+# added expected profit. Revisit only with real backtest evidence that
+# a higher value actually improves risk-adjusted returns, the same bar
+# MIN_TREND_STRENGTH_ATR_MULTIPLE had to clear before its own default
+# changed.
+PYRAMID_RISK_PCT = float(os.getenv("PYRAMID_RISK_PCT", str(RISK_PER_TRADE_PCT / 2)))
+
 # --- Chart-pattern confirmation filter (see patterns.py) -------------------
 # Opt-in, off by default: when True, a newly-confirmed bearish reversal
 # pattern (double-top, head-and-shoulders, triangle) blocks new

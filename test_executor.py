@@ -15,6 +15,7 @@ import ccxt
 
 from executor import (
     _client_order_id,
+    count_buy_fills_since_last_sell,
     get_base_asset_balance,
     get_last_fill_price,
     get_open_stop_loss_orders,
@@ -148,6 +149,41 @@ class MeetsExchangeMinimumsTests(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertIsNone(reason)
+
+
+class CountBuyFillsSinceLastSellTests(unittest.TestCase):
+    """main.py's pyramiding logic uses this (instead of any local
+    state) to know how many tranches of the current position have
+    already been added -- see main.py's own pyramid-add branch."""
+
+    def test_zero_when_flat_with_no_trades_at_all(self):
+        exchange = RecordingExchange(response=[])
+
+        self.assertEqual(count_buy_fills_since_last_sell(exchange, "PAXG/USDT"), 0)
+
+    def test_counts_every_buy_since_the_start_when_theres_never_been_a_sell(self):
+        trades = [{"side": "buy"}, {"side": "buy"}]
+        exchange = RecordingExchange(response=trades)
+
+        self.assertEqual(count_buy_fills_since_last_sell(exchange, "PAXG/USDT"), 2)
+
+    def test_only_counts_buys_after_the_most_recent_sell(self):
+        # Oldest first, like ccxt's own fetch_my_trades ordering.
+        trades = [
+            {"side": "buy"},
+            {"side": "sell"},
+            {"side": "buy"},
+            {"side": "buy"},
+        ]
+        exchange = RecordingExchange(response=trades)
+
+        self.assertEqual(count_buy_fills_since_last_sell(exchange, "PAXG/USDT"), 2)
+
+    def test_zero_right_after_a_sell_with_no_buy_since(self):
+        trades = [{"side": "buy"}, {"side": "sell"}]
+        exchange = RecordingExchange(response=trades)
+
+        self.assertEqual(count_buy_fills_since_last_sell(exchange, "PAXG/USDT"), 0)
 
 
 class ReadRetryTests(unittest.TestCase):

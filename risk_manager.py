@@ -129,7 +129,13 @@ def take_profit_price(entry_price: float, side: str = "long") -> float:
     return entry_price * (1 - TAKE_PROFIT_PCT / 100)
 
 
-def position_size(capital: float, entry_price: float, side: str = "long", stop_price: float = None) -> float:
+def position_size(
+    capital: float,
+    entry_price: float,
+    side: str = "long",
+    stop_price: float = None,
+    risk_pct: float = None,
+) -> float:
     """Position size (in base asset units, e.g. BTC) such that hitting
     the stop-loss loses exactly RISK_PER_TRADE_PCT of `capital`, fees
     included.
@@ -149,11 +155,16 @@ def position_size(capital: float, entry_price: float, side: str = "long", stop_p
     STOP_LOSS_PCT distance below/above entry. Sizing is the only thing
     this changes — placing the actual stop order is still the caller's
     job, same as before.
+
+    `risk_pct`: overrides RISK_PER_TRADE_PCT for this call. Only real
+    use so far is config.PYRAMID_RISK_PCT for an add-on tranche on an
+    already-open position (see USE_PYRAMIDING) -- a fresh entry should
+    almost always use the default (None -> RISK_PER_TRADE_PCT).
     """
     if capital <= 0 or entry_price <= 0:
         return 0.0
 
-    risk_amount = capital * (RISK_PER_TRADE_PCT / 100)
+    risk_amount = capital * ((risk_pct if risk_pct is not None else RISK_PER_TRADE_PCT) / 100)
     if stop_price is None:
         stop_price = stop_loss_price(entry_price, side)
     price_risk_pct = abs(entry_price - stop_price) / entry_price

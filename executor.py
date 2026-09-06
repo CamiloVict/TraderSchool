@@ -181,6 +181,25 @@ def get_last_fill_price(exchange: ccxt.binance, symbol: str, side: str) -> float
     return 0.0
 
 
+def count_buy_fills_since_last_sell(exchange: ccxt.binance, symbol: str) -> int:
+    """How many 'buy' fills have happened since the most recent 'sell'
+    fill (or since the start of the fetched history, if there's no
+    sell at all yet) -- used by main.py's pyramiding logic to know how
+    many tranches of the current position have already been added,
+    without keeping any local state of its own (same "read fresh from
+    the exchange every time" posture as get_last_fill_price/
+    get_total_base_asset_balance -- see main.py's own module
+    docstring). Returns 0 if flat (no buy fills since the last sell)."""
+    trades = call_with_retries(exchange.fetch_my_trades, symbol, limit=20)
+    count = 0
+    for trade in reversed(trades):
+        if trade.get("side") == "sell":
+            break
+        if trade.get("side") == "buy":
+            count += 1
+    return count
+
+
 def get_base_asset_balance(exchange: ccxt.binance, symbol: str) -> float:
     """Free (available to trade/withdraw) balance of the base asset for
     `symbol` (e.g. 'BTC' in 'BTC/USDT'). An open stop-loss order locks

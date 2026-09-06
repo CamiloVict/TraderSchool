@@ -36,7 +36,14 @@ Which signal decides entries depends on config.USE_SETUP_ENGINE
     (off by default, unlike the trend filter), a newly-confirmed
     bearish reversal pattern — double-top, head-and-shoulders, or
     triangle (see patterns.py) — blocks a new entry too. Both are
-    purely vetoes, never an extra exit trigger.
+    purely vetoes, never an extra exit trigger. If config.
+    USE_PYRAMIDING is also on (off by default), an already-open
+    position can get up to MAX_PYRAMID_ENTRIES add-on tranches
+    ("pyramid_add" — see risk_manager.py's own docstring and README's
+    pyramiding section) once price has moved PYRAMID_TRIGGER_ATR_MULTIPLE
+    ATRs beyond the last tranche's entry, sized against PYRAMID_RISK_PCT
+    (deliberately smaller than a fresh entry's risk) and with the
+    position's stop recalculated to cover the new total size.
 
   - **True: Setup Engine**, in _run_setup_engine_cycle(). Replaces the
     EMA signal with context_engine's Setup Engine — currently
@@ -107,11 +114,15 @@ from config import (
     BINANCE_API_KEY,
     CONTEXT_HISTORY_DAYS,
     MAX_CONSECUTIVE_LOSSES,
+    MAX_PYRAMID_ENTRIES,
     MIN_TREND_STRENGTH_ATR_MULTIPLE,
+    PYRAMID_RISK_PCT,
+    PYRAMID_TRIGGER_ATR_MULTIPLE,
     RISK_PER_TRADE_PCT,
     SYMBOL,
     TIMEFRAME,
     USE_PATTERN_FILTER,
+    USE_PYRAMIDING,
     USE_SETUP_ENGINE,
     USE_STRUCTURAL_STOP,
     USE_TESTNET,
@@ -290,6 +301,7 @@ def _run_ema_cycle(exchange) -> dict:
     """EMA-crossover trading cycle — see the module docstring."""
     from executor import (
         cancel_order,
+        count_buy_fills_since_last_sell,
         get_average_fill_price,
         get_base_asset_balance,
         get_last_fill_price,
@@ -422,6 +434,42 @@ def _run_ema_cycle(exchange) -> dict:
         stop_source = "structural_swing_low" if USE_STRUCTURAL_STOP else "flat_stop_loss_pct"
         stop_order = place_stop_loss_order(exchange, SYMBOL, total_balance, stop_price)
         action = "stop_loss_replaced"
+    elif signal == 1 and in_position and USE_PYRAMIDING:
+        # Reached only once a protective stop is confirmed to exist
+        # (self-heal above already claimed the "no stop" case) --
+        # see backtester._simulate's own docstring for the full
+        # reasoning this mirrors. current_atr/MAX_PYRAMID_ENTRIES
+        # gate whether another tranche is even eligible; the ATR
+        # comparison below is the actual trigger.
+        existing_adds = max(count_buy_fills_since_last_sell(exchange, SYMBOL) - 1, 0)
+        last_add_price = get_last_fill_price(exchange, SYMBOL, "buy") or price
+        if (
+            existing_adds < MAX_PYRAMID_ENTRIES
+            and current_atr
+            and current_atr > 0
+            and price >= last_add_price + PYRAMID_TRIGGER_ATR_MULTIPLE * current_atr
+        ):
+            quote_balance = get_quote_asset_balance(exchange, SYMBOL)
+            candidate_stop = stop_for(price)
+            add_size = position_size(quote_balance, price, stop_price=candidate_stop, risk_pct=PYRAMID_RISK_PCT)
+            if add_size > 0:
+                size_ok, size_reject_reason = meets_exchange_minimums(exchange, SYMBOL, add_size, price)
+                if size_ok:
+                    order = place_market_order(exchange, SYMBOL, "buy", add_size)
+                    action = "pyramid_add"
+                    fill_price = get_average_fill_price(order) or price
+                    # Recalculate the stop off this tranche's own fill
+                    # price and replace the single stop order that
+                    # covers the whole position -- adding exposure also
+                    # raises the stop, it doesn't just sit on the
+                    # original tranche's level.
+                    for stale_order in get_open_stop_loss_orders(exchange, SYMBOL):
+                        cancel_order(exchange, SYMBOL, stale_order["id"])
+                    stop_price = stop_for(fill_price)
+                    stop_source = "structural_swing_low" if USE_STRUCTURAL_STOP else "flat_stop_loss_pct"
+                    new_total_balance = get_total_base_asset_balance(exchange, SYMBOL)
+                    stop_order = place_stop_loss_order(exchange, SYMBOL, new_total_balance, stop_price)
+                    size = add_size
 
     result = {
         "timestamp": str(latest.name),
@@ -503,6 +551,12 @@ def _ema_action_reason(
         return f"EMA signal is bullish and every risk check passed, but the sized position isn't executable: {size_reject_reason}"
     if action == "stop_loss_replaced":
         return f"in position with no protective stop on the exchange -- rebuilt a {stop_source} stop at {stop_price} from the last buy fill"
+    if action == "pyramid_add":
+        return (
+            f"price extended far enough beyond the last tranche's entry with the EMA signal "
+            f"still bullish; added a tranche sized to risk {PYRAMID_RISK_PCT}% of capital, "
+            f"stop recalculated to a {stop_source} stop at {stop_price}"
+        )
     if in_position:
         return "in position, EMA signal still bullish -- holding, waiting for the exit condition"
     return "no EMA entry signal (fast EMA not above slow)"

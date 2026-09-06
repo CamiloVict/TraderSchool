@@ -38,11 +38,12 @@ def make_df(closes: list) -> pd.DataFrame:
     return pd.DataFrame(rows, index=pd.DatetimeIndex(index, name="timestamp"))
 
 
-def _expected_size(capital: float, entry_price: float, stop_price: float) -> float:
+def _expected_size(capital: float, entry_price: float, stop_price: float, risk_pct: float = 1.0) -> float:
     """Reference implementation of position_size's own formula, fees
     included, for tests to check against independently of the
-    production code path."""
-    risk_amount = capital * 0.01
+    production code path. `risk_pct` defaults to 1.0 (%), matching
+    RISK_PER_TRADE_PCT's own default."""
+    risk_amount = capital * (risk_pct / 100)
     price_risk_pct = abs(entry_price - stop_price) / entry_price
     round_trip_fee_pct = 2 * TAKER_FEE_PCT / 100
     position_value = risk_amount / (price_risk_pct + round_trip_fee_pct)
@@ -83,6 +84,31 @@ class PositionSizeStopPriceTests(unittest.TestCase):
     def test_short_side_still_works_with_an_explicit_stop_above_entry(self):
         size = position_size(1000.0, 100.0, side="short", stop_price=105.0)
         self.assertGreater(size, 0.0)
+
+
+class PositionSizeRiskPctOverrideTests(unittest.TestCase):
+    """The `risk_pct` override main.py's pyramiding add-on uses
+    (config.PYRAMID_RISK_PCT) to size an add-on tranche smaller than a
+    fresh entry's RISK_PER_TRADE_PCT."""
+
+    def test_none_behaves_exactly_like_the_default_risk_per_trade_pct(self):
+        default_size = position_size(1000.0, 100.0)
+        explicit_none_size = position_size(1000.0, 100.0, risk_pct=None)
+
+        self.assertEqual(default_size, explicit_none_size)
+
+    def test_half_the_default_risk_sizes_half_the_position(self):
+        default_size = position_size(1000.0, 100.0)
+        half_risk_size = position_size(1000.0, 100.0, risk_pct=0.5)
+
+        self.assertAlmostEqual(half_risk_size, default_size / 2, places=6)
+        expected = _expected_size(1000.0, 100.0, stop_loss_price(100.0), risk_pct=0.5)
+        self.assertAlmostEqual(half_risk_size, expected, places=6)
+
+    def test_zero_risk_pct_sizes_a_zero_position_not_the_default(self):
+        # 0.0 is falsy but not None -- must not silently fall back to
+        # RISK_PER_TRADE_PCT.
+        self.assertEqual(position_size(1000.0, 100.0, risk_pct=0.0), 0.0)
 
 
 class PositionSizeFeeAwarenessTests(unittest.TestCase):

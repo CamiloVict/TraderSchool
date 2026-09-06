@@ -302,6 +302,71 @@ class RunTradingCycleTests(unittest.TestCase):
         expected_stop = risk_manager.stop_loss_price(10500.0)
         self.assertAlmostEqual(stop_orders[0]["triggerPrice"], expected_stop, places=6)
 
+    def test_pyramid_add_places_a_second_tranche_and_recalculates_the_stop(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        base = SYMBOL.split("/")[0]
+        stale_stop = {"id": "stop-1", "side": "sell", "amount": 1.0, "triggerPrice": 9800.0}
+        exchange = FakeExchange(
+            candles,
+            free={base: 1.0, "USDT": 1000.0},
+            open_orders=[stale_stop],
+            # The one prior fill is far below the current close (11990),
+            # comfortably past any plausible ATR-based trigger distance.
+            trades=[{"side": "buy", "price": 10000.0, "amount": 1.0}],
+        )
+
+        with patch("main.USE_PYRAMIDING", True):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "pyramid_add")
+        buy_orders = [o for o in exchange.created_orders if o["side"] == "buy"]
+        self.assertEqual(len(buy_orders), 1)
+        self.assertEqual(exchange.cancelled_ids, ["stop-1"])
+        stop_orders = [o for o in exchange.created_orders if o["side"] == "sell"]
+        self.assertEqual(len(stop_orders), 1)
+        self.assertIsNotNone(stop_orders[0]["triggerPrice"])
+
+    def test_pyramiding_off_never_adds_a_tranche(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        base = SYMBOL.split("/")[0]
+        stale_stop = {"id": "stop-1", "side": "sell", "amount": 1.0, "triggerPrice": 9800.0}
+        exchange = FakeExchange(
+            candles,
+            free={base: 1.0, "USDT": 1000.0},
+            open_orders=[stale_stop],
+            trades=[{"side": "buy", "price": 10000.0, "amount": 1.0}],
+        )
+
+        with patch("main.USE_PYRAMIDING", False):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "hold")
+        self.assertEqual(exchange.created_orders, [])
+        self.assertEqual(exchange.cancelled_ids, [])
+
+    def test_pyramid_add_respects_the_max_entries_cap(self):
+        candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
+        base = SYMBOL.split("/")[0]
+        stale_stop = {"id": "stop-1", "side": "sell", "amount": 2.0, "triggerPrice": 9800.0}
+        exchange = FakeExchange(
+            candles,
+            free={base: 2.0, "USDT": 1000.0},
+            open_orders=[stale_stop],
+            # Two prior buy fills since the last sell -- already at
+            # MAX_PYRAMID_ENTRIES's default of 1 add-on (2 tranches
+            # total), so a third should not fire.
+            trades=[
+                {"side": "buy", "price": 10000.0, "amount": 1.0},
+                {"side": "buy", "price": 10200.0, "amount": 1.0},
+            ],
+        )
+
+        with patch("main.USE_PYRAMIDING", True):
+            result = main.run_trading_cycle(exchange)
+
+        self.assertEqual(result["action"], "hold")
+        self.assertEqual(exchange.created_orders, [])
+
     def test_pattern_filter_blocks_entry_when_enabled_and_bearish(self):
         candles = make_candles(200, start_price=10000, step=10)  # uptrend -> signal 1
         exchange = FakeExchange(candles, free={"USDT": 1000.0})

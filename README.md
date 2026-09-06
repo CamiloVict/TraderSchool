@@ -494,6 +494,56 @@ de sumar un indicador nuevo. **No aplica al bot de BTC**
 cruce de EMA, así que no genera ni consume una columna `trend_strength`
 — ver la sección de BTC más abajo para su propio diagnóstico.
 
+## Pyramiding: agregar a una posición abierta (`risk_manager.py`, opt-in)
+
+```bash
+python backtester.py --source real --days 365 --pyramiding
+python backtester.py --source real --days 365 --pyramiding --pyramid-trigger-atr-multiple 1.0 --max-pyramid-entries 2
+```
+
+Con `USE_PYRAMIDING` (o `--pyramiding`) activo, una posición ya abierta
+puede recibir una tranche adicional (`MAX_PYRAMID_ENTRIES`, default 1 —
+o sea, máximo 2 tranches por posición) cada vez que el precio avanza
+al menos `PYRAMID_TRIGGER_ATR_MULTIPLE` ATRs (default 1.5) más allá de
+la última entrada, siempre que la señal de EMA siga alcista. No es "más
+operaciones": es exponer más capital a una tendencia que ya se está
+confirmando, sin bajar la barra de entrada de la primera tranche.
+
+**Riesgo de la tranche agregada**: se dimensiona con `PYRAMID_RISK_PCT`
+(default `RISK_PER_TRADE_PCT / 2`, no el mismo 100%) — arriesgar un
+`RISK_PER_TRADE_PCT` completo otra vez encima de una posición ya
+abierta duplica la pérdida en el peor caso (una reversión justo después
+de agregar) sin una ventaja correspondiente que lo justifique; eso es
+más varianza, no más retorno esperado. Subir este valor solo tiene
+sentido con evidencia real de backtest que lo respalde, la misma vara
+que tuvo que cruzar el nuevo default de `MIN_TREND_STRENGTH_ATR_MULTIPLE`.
+
+**Manejo del stop**: cada vez que se agrega una tranche, se cancela el
+stop existente y se coloca uno nuevo que cubre toda la posición
+(original + agregada), recalculado con la misma lógica `stop_for()` de
+una entrada nueva sobre el precio de la tranche recién agregada — en la
+práctica esto sube el stop, protegiendo parte de la ganancia ya hecha
+en vez de solo sumar exposición. `entry_price`/`size` del trade
+resultante son el promedio ponderado por tamaño (costo base) y el
+tamaño total entre todas las tranches; `entry_time` sigue siendo el de
+la *primera* tranche.
+
+**Sin estado local propio**: `main.py --trade` no guarda en disco
+cuántas tranches lleva agregadas una posición — lee
+`exchange.fetch_my_trades()` en cada ciclo (`executor.
+count_buy_fills_since_last_sell`) para saber cuántos fills de compra
+hubo desde la última venta, mismo criterio que ya usa el self-heal para
+reconstruir el precio de entrada. Mismo "leer siempre fresco del
+exchange" que el resto del bot, en vez de un archivo de estado que
+podría desincronizarse.
+
+Acción `pyramid_add` en `main.py --trade` (notifica igual que `buy`/
+`sell` — no es una acción silenciosa). Opt-in y apagado por defecto,
+sin backtest real todavía (no hay acceso a red desde este entorno de
+desarrollo hacia Binance) — correr los comandos de arriba contra datos
+reales antes de confiar en los defaults de `PYRAMID_TRIGGER_ATR_MULTIPLE`/
+`MAX_PYRAMID_ENTRIES`/`PYRAMID_RISK_PCT`.
+
 ## Daily Market Context Engine (`context_engine/`)
 
 ```bash
@@ -931,6 +981,22 @@ Sigue sin haber backend: todo sale de JSON estáticos en
   (`scalping_backtester.py`): esa estrategia es RSI/rango, no cruce de
   EMA, así que no tiene una columna `trend_strength` que consultar —
   ver la sección de BTC más abajo para su propio diagnóstico
+- [x] `USE_PYRAMIDING` / `MAX_PYRAMID_ENTRIES` / `PYRAMID_TRIGGER_ATR_MULTIPLE`
+  / `PYRAMID_RISK_PCT` (ver la sección propia más arriba): agregar
+  tranches a una posición ya abierta cuando el precio confirma la
+  tendencia más allá de la última entrada, en vez de solo esperar una
+  nueva señal de cruce. Opt-in y apagado por defecto — sin backtest
+  real todavía (no hay red hacia Binance desde este entorno). El add-on
+  arriesga la mitad de `RISK_PER_TRADE_PCT` por defecto, no el mismo
+  100% otra vez — una decisión de diseño, no un valor a probar y
+  ajustar a ciegas: doblar el riesgo completo encima de una posición
+  ya abierta aumenta la varianza del peor caso sin una ventaja
+  correspondiente que lo justifique. `executor.
+  count_buy_fills_since_last_sell()` (nuevo) lee `fetch_my_trades()`
+  para saber cuántas tranches ya lleva la posición, sin estado local
+  propio — mismo criterio que el self-heal ya usaba para reconstruir el
+  precio de entrada. Acción `pyramid_add` en `main.py --trade`,
+  notifica igual que `buy`/`sell`
 - [x] `executor.meets_exchange_minimums()`: `risk_manager.position_size()`
   es matemática de riesgo pura, sin idea de los filtros propios de
   Binance (`LOT_SIZE`/`MIN_NOTIONAL`) — una posición bien dimensionada

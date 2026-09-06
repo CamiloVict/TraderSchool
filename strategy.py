@@ -28,7 +28,8 @@ SLOW_PERIOD = 50
 def add_signals(df: pd.DataFrame, fast: int = FAST_PERIOD, slow: int = SLOW_PERIOD) -> pd.DataFrame:
     """Return a copy of `df` (must have 'high'/'low'/'close' columns)
     with EMA columns, a `signal` column (1 = long, 0 = flat) from an
-    EMA(fast)/EMA(slow) crossover, and a `trend_strength` column.
+    EMA(fast)/EMA(slow) crossover, an `atr` column, and a
+    `trend_strength` column.
 
     `trend_strength` = |ema_fast - ema_slow| / ATR: how far apart the
     two EMAs actually are at the crossover, in volatility-normalized
@@ -50,5 +51,6 @@ def add_signals(df: pd.DataFrame, fast: int = FAST_PERIOD, slow: int = SLOW_PERI
     out["ema_fast"] = out["close"].ewm(span=fast, adjust=False).mean()
     out["ema_slow"] = out["close"].ewm(span=slow, adjust=False).mean()
     out["signal"] = (out["ema_fast"] > out["ema_slow"]).astype(int)
-    out["trend_strength"] = (out["ema_fast"] - out["ema_slow"]).abs() / atr(out)
+    out["atr"] = atr(out)
+    out["trend_strength"] = (out["ema_fast"] - out["ema_slow"]).abs() / out["atr"]
     return out

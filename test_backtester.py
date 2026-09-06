@@ -410,5 +410,101 @@ class TrendStrengthFilterWiringTests(unittest.TestCase):
         self.assertTrue((data["equity"] != 1000.0).any())
 
 
+class PyramidingWiringTests(unittest.TestCase):
+    """Verifies _simulate() actually wires config.USE_PYRAMIDING into an
+    already-open position: an add-on tranche when price moves far
+    enough in favor, capped at max_pyramid_entries, blending
+    entry_price/size, and never firing on a fresh (position == 0)
+    entry (that's still governed only by the normal entry check)."""
+
+    def _rise_then_reversal_df(self):
+        warmup = [100.0] * (SLOW_PERIOD + 5)
+        rise = [100.0 + i for i in range(1, 61)]  # long enough for several pyramid triggers
+        fall = [rise[-1] - 2 * i for i in range(1, 31)]  # forces the EMA cross back down
+        return make_df(warmup + rise + fall)
+
+    def test_adds_exactly_one_tranche_when_capped_at_one(self):
+        df = self._rise_then_reversal_df()
+
+        _, _, trades = _simulate(
+            df,
+            initial_capital=1000.0,
+            use_trend_strength_filter=False,
+            use_pyramiding=True,
+            max_pyramid_entries=1,
+            pyramid_trigger_atr_multiple=0.5,
+        )
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0]["pyramid_adds"], 1)
+
+    def test_pyramiding_off_never_adds_a_tranche(self):
+        df = self._rise_then_reversal_df()
+
+        _, _, trades = _simulate(
+            df, initial_capital=1000.0, use_trend_strength_filter=False, use_pyramiding=False
+        )
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0]["pyramid_adds"], 0)
+
+    def test_max_pyramid_entries_zero_behaves_like_off(self):
+        df = self._rise_then_reversal_df()
+
+        _, _, trades = _simulate(
+            df,
+            initial_capital=1000.0,
+            use_trend_strength_filter=False,
+            use_pyramiding=True,
+            max_pyramid_entries=0,
+            pyramid_trigger_atr_multiple=0.5,
+        )
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0]["pyramid_adds"], 0)
+
+    def test_blended_entry_price_sits_above_the_single_tranche_entry(self):
+        df = self._rise_then_reversal_df()
+
+        _, _, trades = _simulate(
+            df,
+            initial_capital=1000.0,
+            use_trend_strength_filter=False,
+            use_pyramiding=True,
+            max_pyramid_entries=1,
+            pyramid_trigger_atr_multiple=0.5,
+        )
+
+        _, _, no_pyramid_trades = _simulate(
+            df, initial_capital=1000.0, use_trend_strength_filter=False, use_pyramiding=False
+        )
+
+        self.assertEqual(trades[0]["pyramid_adds"], 1)
+        # The add-on tranche only ever buys higher (price already moved
+        # in favor before it fires), so the blended entry_price must sit
+        # strictly above the single-tranche entry_price it would
+        # otherwise equal.
+        self.assertGreater(trades[0]["entry_price"], no_pyramid_trades[0]["entry_price"])
+        # entry_time is the *first* tranche's time, not the add-on's.
+        self.assertEqual(trades[0]["entry_time"], no_pyramid_trades[0]["entry_time"])
+
+    def test_impossibly_large_trigger_distance_never_adds_a_tranche(self):
+        # Proves the add-on check is actually gated on the trigger
+        # distance, not just "in position and pyramiding is on."
+        df = self._rise_then_reversal_df()
+
+        _, _, trades = _simulate(
+            df,
+            initial_capital=1000.0,
+            use_trend_strength_filter=False,
+            use_pyramiding=True,
+            max_pyramid_entries=1,
+            pyramid_trigger_atr_multiple=1_000_000.0,
+        )
+
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0]["pyramid_adds"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

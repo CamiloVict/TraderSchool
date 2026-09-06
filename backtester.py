@@ -60,7 +60,10 @@ import numpy as np
 import pandas as pd
 
 from config import (
+    MAX_PYRAMID_ENTRIES,
     MIN_TREND_STRENGTH_ATR_MULTIPLE,
+    PYRAMID_RISK_PCT,
+    PYRAMID_TRIGGER_ATR_MULTIPLE,
     RISK_PER_TRADE_PCT,
     STOP_LOSS_PCT,
     TAKE_PROFIT_PCT,
@@ -81,8 +84,30 @@ def _simulate(
     use_take_profit: bool = False,
     use_trend_strength_filter: bool = False,
     min_trend_strength: float = None,
+    use_pyramiding: bool = False,
+    max_pyramid_entries: int = None,
+    pyramid_trigger_atr_multiple: float = None,
+    pyramid_risk_pct: float = None,
 ):
     """Core simulation loop, shared by run_backtest() and export_report().
+
+    `use_pyramiding`: opt-in add-on tranches on an already-open long
+    (see config.USE_PYRAMIDING's own docstring for the full reasoning).
+    While in position and the EMA signal is still bullish (not a fresh
+    entry, not an exit), adds one more tranche, sized against
+    `pyramid_risk_pct` (defaults to config.PYRAMID_RISK_PCT, deliberately
+    smaller than a fresh entry's RISK_PER_TRADE_PCT), each time price
+    moves at least `pyramid_trigger_atr_multiple` ATRs beyond the
+    previous tranche's own entry price -- up to `max_pyramid_entries`
+    additional tranches per position (defaults to
+    config.MAX_PYRAMID_ENTRIES). Recalculates the position's stop off
+    the new tranche's entry every time one is added (same stop_for()
+    logic a fresh entry would use), so adding also raises the stop, not
+    just the exposure. `entry_price`/`size` on the resulting trade
+    record are the blended (size-weighted average cost, total size)
+    values across every tranche; `entry_time` stays the *first*
+    tranche's time (what "how long was this trade open" should mean);
+    `pyramid_adds` records how many add-ons actually fired.
 
     `use_pattern_filter`: opt-in reversal-pattern confirmation filter
     (see patterns.py) — a confirmed bearish pattern (double-top,
@@ -141,13 +166,21 @@ def _simulate(
         data["pattern_signal"] = 0
         entry_blocked = pd.Series(False, index=data.index)
 
+    max_pyramid_entries_ = max_pyramid_entries if max_pyramid_entries is not None else MAX_PYRAMID_ENTRIES
+    pyramid_trigger_atr_multiple_ = (
+        pyramid_trigger_atr_multiple if pyramid_trigger_atr_multiple is not None else PYRAMID_TRIGGER_ATR_MULTIPLE
+    )
+    pyramid_risk_pct_ = pyramid_risk_pct if pyramid_risk_pct is not None else PYRAMID_RISK_PCT
+
     capital = initial_capital  # total account value (cash + any open position, at cost)
     position = 0  # 0 = flat, 1 = long
-    entry_price = 0.0
-    entry_time = None
+    entry_price = 0.0  # blended (size-weighted average cost) across every tranche
+    entry_time = None  # first tranche's time, not the last one added
     stop_price = None
     target_price = None
-    size = 0.0  # base-asset units held while in position
+    size = 0.0  # base-asset units held while in position, across every tranche
+    last_entry_price = None  # most recently added tranche's own entry price
+    pyramid_adds = 0  # add-on tranches on top of the initial entry, this position
     trades = []
     equity_curve = []
     total_fees_paid = 0.0
@@ -176,12 +209,15 @@ def _simulate(
                     "return_pct": float((exit_price / entry_price - 1) * 100),
                     "exit_reason": "stop_loss",
                     "stop_loss_price": float(stop_price),
+                    "pyramid_adds": pyramid_adds,
                 }
             )
             position = 0
             stop_price = None
             target_price = None
             size = 0.0
+            last_entry_price = None
+            pyramid_adds = 0
         elif position == 1 and target_price is not None and high >= target_price:
             # Same intra-candle-first priority as the stop-loss check
             # above (checked before this candle's own signal), and
@@ -202,12 +238,15 @@ def _simulate(
                     "return_pct": float((exit_price / entry_price - 1) * 100),
                     "exit_reason": "take_profit",
                     "stop_loss_price": float(stop_price) if stop_price is not None else None,
+                    "pyramid_adds": pyramid_adds,
                 }
             )
             position = 0
             stop_price = None
             target_price = None
             size = 0.0
+            last_entry_price = None
+            pyramid_adds = 0
         elif (
             position == 0
             and signal == 1
@@ -234,7 +273,38 @@ def _simulate(
                 stop_price = candidate_stop
                 target_price = take_profit_price(price) if use_take_profit else None
                 size = candidate_size
+                last_entry_price = price
+                pyramid_adds = 0
                 cost = size * entry_price
+                fee = cost * TAKER_FEE_PCT / 100
+                capital -= fee
+                total_fees_paid += fee
+        elif (
+            use_pyramiding
+            and position == 1
+            and signal == 1
+            and pyramid_adds < max_pyramid_entries_
+            and pd.notna(row["atr"])
+            and row["atr"] > 0
+            and price >= last_entry_price + pyramid_trigger_atr_multiple_ * row["atr"]
+        ):
+            # Same stop logic a fresh entry would use, recomputed off
+            # this tranche's own entry -- adding exposure also raises
+            # the stop, same as README's own reasoning for why this
+            # isn't just "buy more at the same risk."
+            if use_structural_stop:
+                candidate_stop = structural_stop_price(data.loc[:timestamp], price)
+            else:
+                candidate_stop = stop_loss_price(price)
+            add_size = position_size(capital, price, stop_price=candidate_stop, risk_pct=pyramid_risk_pct_)
+            if add_size > 0:
+                new_size = size + add_size
+                entry_price = (entry_price * size + price * add_size) / new_size
+                size = new_size
+                stop_price = candidate_stop
+                last_entry_price = price
+                pyramid_adds += 1
+                cost = add_size * price
                 fee = cost * TAKER_FEE_PCT / 100
                 capital -= fee
                 total_fees_paid += fee
@@ -252,12 +322,15 @@ def _simulate(
                     "return_pct": float((price / entry_price - 1) * 100),
                     "exit_reason": "signal",
                     "stop_loss_price": float(stop_price),
+                    "pyramid_adds": pyramid_adds,
                 }
             )
             position = 0
             stop_price = None
             target_price = None
             size = 0.0
+            last_entry_price = None
+            pyramid_adds = 0
 
         if position == 1:
             equity_curve.append(capital - (size * entry_price) + (size * price))
@@ -514,6 +587,10 @@ def run_backtest(
     use_take_profit: bool = False,
     use_trend_strength_filter: bool = False,
     min_trend_strength: float = None,
+    use_pyramiding: bool = False,
+    max_pyramid_entries: int = None,
+    pyramid_trigger_atr_multiple: float = None,
+    pyramid_risk_pct: float = None,
 ) -> dict:
     """Simulate the EMA-crossover strategy over `df` and return metrics.
 
@@ -530,6 +607,10 @@ def run_backtest(
         use_take_profit,
         use_trend_strength_filter,
         min_trend_strength,
+        use_pyramiding,
+        max_pyramid_entries,
+        pyramid_trigger_atr_multiple,
+        pyramid_risk_pct,
     )
     return metrics
 
@@ -548,6 +629,10 @@ def export_report(
     use_take_profit: bool = False,
     use_trend_strength_filter: bool = False,
     min_trend_strength: float = None,
+    use_pyramiding: bool = False,
+    max_pyramid_entries: int = None,
+    pyramid_trigger_atr_multiple: float = None,
+    pyramid_risk_pct: float = None,
 ) -> dict:
     """Run the backtest and write a JSON report the React dashboard reads:
     metrics, per-candle OHLC/EMA/signal/equity, and the trade list.
@@ -563,6 +648,10 @@ def export_report(
         use_take_profit,
         use_trend_strength_filter,
         min_trend_strength,
+        use_pyramiding,
+        max_pyramid_entries,
+        pyramid_trigger_atr_multiple,
+        pyramid_risk_pct,
     )
 
     candles = [
@@ -609,6 +698,8 @@ def export_report(
                 else None
             ),
             "stop_priced_off": "structural (last swing low, ATR-buffered)" if use_structural_stop else "flat stop_loss_pct",
+            "pyramiding_enabled": use_pyramiding,
+            "max_pyramid_entries": (max_pyramid_entries if max_pyramid_entries is not None else MAX_PYRAMID_ENTRIES) if use_pyramiding else None,
         },
         "metrics": metrics,
         "candles": candles,
@@ -623,6 +714,7 @@ def export_report(
                 "stop_loss_price": t["stop_loss_price"],
                 "mae_pct": t["mae_pct"],
                 "mfe_pct": t["mfe_pct"],
+                "pyramid_adds": t["pyramid_adds"],
             }
             for t in trades
         ],
@@ -637,7 +729,7 @@ def export_report(
 if __name__ == "__main__":
     import argparse
 
-    from config import SYMBOL, TIMEFRAME
+    from config import SYMBOL, TIMEFRAME, USE_PYRAMIDING, USE_TREND_STRENGTH_FILTER
     from data_fetcher import fetch_ohlcv_history, get_exchange, get_public_data_exchange
 
     parser = argparse.ArgumentParser(description="Backtest the EMA-crossover strategy")
@@ -690,12 +782,15 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--trend-strength-filter",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=USE_TREND_STRENGTH_FILTER,
         help=(
-            "Opt-in trend-strength confirmation filter (config."
-            "USE_TREND_STRENGTH_FILTER): blocks a new EMA-crossover entry "
-            "unless the EMAs are at least --min-trend-strength ATRs apart. "
-            "Off by default."
+            "Trend-strength confirmation filter (config.USE_TREND_STRENGTH_FILTER, "
+            f"default {USE_TREND_STRENGTH_FILTER} -- matches what main.py --trade "
+            "actually does unless overridden here): blocks a new EMA-crossover "
+            "entry unless the EMAs are at least --min-trend-strength ATRs apart. "
+            "Use --no-trend-strength-filter for the raw EMA crossover with no "
+            "confirmation (e.g. as a baseline to compare against)."
         ),
     )
     parser.add_argument(
@@ -707,6 +802,41 @@ if __name__ == "__main__":
             "Threshold for --trend-strength-filter, in ATRs of EMA "
             "separation. Defaults to config.MIN_TREND_STRENGTH_ATR_MULTIPLE."
         ),
+    )
+    parser.add_argument(
+        "--pyramiding",
+        action=argparse.BooleanOptionalAction,
+        default=USE_PYRAMIDING,
+        help=(
+            f"Add-on tranches on an already-open long (config.USE_PYRAMIDING, "
+            f"default {USE_PYRAMIDING}). See config.py's own docstring for the "
+            "full reasoning. Use --no-pyramiding to force it off."
+        ),
+    )
+    parser.add_argument(
+        "--max-pyramid-entries",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Max add-on tranches per position. Defaults to config.MAX_PYRAMID_ENTRIES.",
+    )
+    parser.add_argument(
+        "--pyramid-trigger-atr-multiple",
+        type=float,
+        default=None,
+        metavar="ATR_MULTIPLE",
+        help=(
+            "How many ATRs price must move beyond the previous tranche's entry "
+            "before another tranche is added. Defaults to "
+            "config.PYRAMID_TRIGGER_ATR_MULTIPLE."
+        ),
+    )
+    parser.add_argument(
+        "--pyramid-risk-pct",
+        type=float,
+        default=None,
+        metavar="PCT",
+        help="Risk %% used to size an add-on tranche. Defaults to config.PYRAMID_RISK_PCT.",
     )
     parser.add_argument(
         "--walk-forward",
@@ -753,6 +883,10 @@ if __name__ == "__main__":
                 use_take_profit=args.take_profit,
                 use_trend_strength_filter=args.trend_strength_filter,
                 min_trend_strength=args.min_trend_strength,
+                use_pyramiding=args.pyramiding,
+                max_pyramid_entries=args.max_pyramid_entries,
+                pyramid_trigger_atr_multiple=args.pyramid_trigger_atr_multiple,
+                pyramid_risk_pct=args.pyramid_risk_pct,
             )
             segment_returns.append(segment_metrics["total_return_pct"])
             print(
@@ -783,6 +917,10 @@ if __name__ == "__main__":
                 use_take_profit=args.take_profit,
                 use_trend_strength_filter=args.trend_strength_filter,
                 min_trend_strength=args.min_trend_strength,
+                use_pyramiding=args.pyramiding,
+                max_pyramid_entries=args.max_pyramid_entries,
+                pyramid_trigger_atr_multiple=args.pyramid_trigger_atr_multiple,
+                pyramid_risk_pct=args.pyramid_risk_pct,
             )
             metrics = report["metrics"]
             print(f"Report written to {args.export}")
@@ -794,6 +932,10 @@ if __name__ == "__main__":
                 use_take_profit=args.take_profit,
                 use_trend_strength_filter=args.trend_strength_filter,
                 min_trend_strength=args.min_trend_strength,
+                use_pyramiding=args.pyramiding,
+                max_pyramid_entries=args.max_pyramid_entries,
+                pyramid_trigger_atr_multiple=args.pyramid_trigger_atr_multiple,
+                pyramid_risk_pct=args.pyramid_risk_pct,
             )
 
         for key, value in metrics.items():
