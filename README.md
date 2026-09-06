@@ -440,10 +440,37 @@ revierte unas velas después (whipsaw) y, en PAXG, se come la comisión
 del round-trip sin ganar nada a cambio. Con `USE_TREND_STRENGTH_FILTER`
 (o `--trend-strength-filter`) activo, una entrada nueva se bloquea si
 `trend_strength` está por debajo de `MIN_TREND_STRENGTH_ATR_MULTIPLE`
-(`--min-trend-strength`, default `1.0`, sin calibrar contra datos
-reales todavía) — acción `entry_blocked_by_weak_trend` en
-`main.py --trade`. Igual que el filtro de patrones: puro veto sobre
-entradas, nunca fuerza una salida, apagado por defecto.
+(`--min-trend-strength`, default `1.5`) — acción
+`entry_blocked_by_weak_trend` en `main.py --trade`. Igual que el
+filtro de patrones: puro veto sobre entradas, nunca fuerza una salida,
+apagado por defecto.
+
+**Backtest real (PAXG/USDT 1h, 365 días) que calibró el default:**
+
+| | Sin filtro | `min=1.0` | `min=1.5` |
+|---|---|---|---|
+| total_return_pct | 8.50 | 6.59 | 7.80 |
+| num_trades | 80 | 41 | 30 |
+| win_rate_pct | 33.75 | 46.34 | 56.67 |
+| sharpe_ratio | 0.99 | 0.87 | 1.09 |
+| profit_factor | 1.39 | 1.45 | 1.89 |
+| max_drawdown_pct | -12.17 | -11.37 | -8.12 |
+
+`min=1.0` (el primer valor puesto, sin backtestear) resultó ser una
+pérdida neta: peor retorno *y* peor Sharpe que no filtrar nada —
+cortaba algunas operaciones malas pero también algunas buenas. `min=1.5`
+mejora todos los ejes de calidad (Sharpe, profit factor, drawdown, win
+rate) a cambio de un costo chico en retorno bruto (-0.7pp) y un tercio
+de las operaciones — bastante menos comisión pagada y bastante menos
+exposición a una señal débil. Por eso el default quedó en `1.5`, no en
+`1.0`.
+
+Un walk-forward de 4 segmentos (con `min=1.0`, sin retunear) mostró que
+el filtro no es magia: un segmento con una caída real de PAXG del
+-15.94% tuvo 11% de win rate y profit factor 0.02 con el filtro puesto
+igual — pero perdió bastante menos que comprar y mantener (-4.46% vs
+-15.94%), consistente con lo que se espera de una salida de tendencia
+long-only en una caída real, no una falla del filtro en sí.
 
 Se descartó ADX (el indicador clásico de "fuerza de tendencia") porque
 `context_engine/features.py` no tiene una implementación propia — para
