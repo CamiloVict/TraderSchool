@@ -628,6 +628,74 @@ de partida. Por eso `USE_STRUCTURAL_STOP` sigue apagado, ahora con
 evidencia real detrás en vez de solo la precaución original de "no
 prender nada sin backtest".
 
+## Strategy Engine V2 — VERSION 1: Trend Pullback (`trend_pullback_strategy.py`, experimental)
+
+```bash
+python trend_pullback_backtester.py --source real --days 365
+python trend_pullback_backtester.py --source real --days 365 --walk-forward 4
+```
+
+El usuario propuso un rediseño completo de 25 secciones (motor de
+régimen de mercado, router de 5+ estrategias, score de contexto
+compuesto, stops/targets por tipo de setup, pyramiding inteligente,
+filtros de sesión/macro, control de correlación, validación
+train/validation/OOS, función objetivo compuesta — el documento
+completo queda en el historial de la sesión que lo escribió). Antes de
+construir todo eso, dos motivos para empezar por la pieza más chica y
+aislada:
+
+1. El propio documento lo pide explícitamente (sus secciones 19-21):
+   no optimizar/construir todo junto, probar componentes aislados
+   contra un baseline, con walk-forward, antes de comprometerse a más.
+2. Ya existe evidencia real en contra de la familia de ideas de fondo:
+   el Setup Engine (`context_engine/`, bias multi-timeframe +
+   estructura + liquidez + setups) es una versión más liviana de
+   exactamente esta filosofía, y su primer backtest real contra PAXG
+   (ver la sección del Setup Engine más abajo) dio `profit_factor 0.16`,
+   `Sharpe -2.85` — peor que el baseline EMA en casi todo. No es
+   evidencia de que la idea completa esté descartada, pero sí de que no
+   conviene invertir semanas de motor nuevo antes de una señal real a
+   favor.
+
+**Qué es VERSION 1 concretamente** (la "VERSION 1" de la sección 25 del
+documento original): la EMA 20/50 deja de ser el disparador de entrada
+y pasa a ser solo contexto — una entrada larga se dispara únicamente
+cuando, dentro de una tendencia alcista ya confirmada (EMA20>EMA50 *y*
+`context_engine.structure`'s propio `Trend.UP`, dos lecturas
+independientes de "hay tendencia" en vez de depender solo de la EMA),
+el precio hace un pullback y esa retracción se resuelve con una
+ruptura de estructura alcista confirmada (BOS o CHOCH — ver
+`context_engine.structure.find_breaks`, ya construida y con su propia
+disciplina anti-look-ahead). La salida es la primera evidencia
+estructural real de reversión (`BEARISH_CHOCH`), no cada pullback
+normal — de lo contrario nunca daría tiempo a que la tendencia corra.
+El stop es `risk_manager.structural_stop_price()` (el swing low que
+originó el pullback, con colchón de ATR) — a diferencia del structural
+stop que se probó y descartó arriba para la EMA cruda, acá el stop
+estructural encaja con la propia premisa de la entrada (se entra
+justo después de que el pullback resolvió sobre ese mismo nivel), así
+que vale la pena probarlo de nuevo en este contexto distinto en vez de
+asumir que fallará igual.
+
+**Deliberadamente NO incluido en V1** (para aislar una sola variable
+nueva a la vez, como pide el propio documento): alineación multi-
+timeframe (HTF), liquidez/sweeps, las otras 4 estrategias del router,
+score de contexto, pyramiding inteligente propio (reusa el pyramiding
+ya existente solo si V1 supera al baseline), sesiones, filtro macro,
+partial take-profit, trailing por tipo de setup. Ninguna de estas se
+construye a menos que V1 muestre una ventaja real medible contra el
+baseline (EMA + filtro de tendencia + pyramiding, ya en producción)
+con walk-forward, no solo en una ventana.
+
+**Estado**: construido y con tests (`test_trend_pullback_strategy.py`,
+`test_trend_pullback_backtester.py`), pero **sin backtest real
+todavía** — no hay acceso a red desde este entorno de desarrollo hacia
+Binance. Los comandos de arriba corren exactamente igual que
+`backtester.py --source real`/`--walk-forward`, comparten
+`compute_metrics()` (mismas métricas, comparables directamente), y no
+tocan `main.py --trade` en absoluto — es puramente un experimento de
+backtest hasta que se decida lo contrario con datos reales.
+
 ## Daily Market Context Engine (`context_engine/`)
 
 ```bash
