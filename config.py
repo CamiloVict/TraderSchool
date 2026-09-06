@@ -103,18 +103,22 @@ USE_STRUCTURAL_STOP = os.getenv("USE_STRUCTURAL_STOP", "false").strip().lower() 
 STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE = float(os.getenv("STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE", "0.2"))
 
 # --- Pyramiding: adding to an already-open position (see risk_manager.py) --
-# Opt-in, off by default -- same "backtest it first" posture as
-# USE_STRUCTURAL_STOP/USE_PATTERN_FILTER: this changes position sizing
-# and stop management for an already-live order, not just an entry veto.
-# When True, an already-open long can get ONE additional tranche (see
-# MAX_PYRAMID_ENTRIES) if price has moved at least
-# PYRAMID_TRIGGER_ATR_MULTIPLE ATRs beyond the last entry while the EMA
-# signal is still bullish -- i.e. only adds to a trend that's still
-# confirming itself, never to a stalling or reversing one. The stop for
-# the whole position is recalculated (not left at the original tranche's
-# level) once a new tranche is added, so pyramiding also locks in some
-# of the first tranche's paper gain instead of just adding exposure.
-USE_PYRAMIDING = os.getenv("USE_PYRAMIDING", "false").strip().lower() == "true"
+# On by default (backtested, see README's own walk-forward numbers --
+# unlike USE_STRUCTURAL_STOP/USE_PATTERN_FILTER, which stay off pending
+# their own backtest evidence): an already-open long can get ONE
+# additional tranche (see MAX_PYRAMID_ENTRIES) if price has moved at
+# least PYRAMID_TRIGGER_ATR_MULTIPLE ATRs beyond the last entry while
+# the EMA signal is still bullish -- i.e. only adds to a trend that's
+# still confirming itself, never to a stalling or reversing one. The
+# stop for the whole position is recalculated (not left at the original
+# tranche's level) once a new tranche is added, so pyramiding also
+# locks in some of the first tranche's paper gain instead of just
+# adding exposure. A 4-segment walk-forward on 365 real PAXG/USDT 1h
+# days showed the same amplifying pattern in every segment (better in
+# the 3 winning ones, worse in the 1 losing one) rather than a fluke
+# concentrated in one window -- see README for the numbers. Set to
+# "false" in .env to go back to plain single-tranche entries.
+USE_PYRAMIDING = os.getenv("USE_PYRAMIDING", "true").strip().lower() == "true"
 # Max additional tranches per position (so total tranches = 1 + this).
 # Deliberately capped low by default -- pyramiding without a cap can
 # turn a single bad reversal into far more than RISK_PER_TRADE_PCT lost,

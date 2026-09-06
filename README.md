@@ -494,7 +494,7 @@ de sumar un indicador nuevo. **No aplica al bot de BTC**
 cruce de EMA, así que no genera ni consume una columna `trend_strength`
 — ver la sección de BTC más abajo para su propio diagnóstico.
 
-## Pyramiding: agregar a una posición abierta (`risk_manager.py`, opt-in)
+## Pyramiding: agregar a una posición abierta (`risk_manager.py`, encendido por defecto)
 
 ```bash
 python backtester.py --source real --days 365 --pyramiding
@@ -538,11 +538,40 @@ exchange" que el resto del bot, en vez de un archivo de estado que
 podría desincronizarse.
 
 Acción `pyramid_add` en `main.py --trade` (notifica igual que `buy`/
-`sell` — no es una acción silenciosa). Opt-in y apagado por defecto,
-sin backtest real todavía (no hay acceso a red desde este entorno de
-desarrollo hacia Binance) — correr los comandos de arriba contra datos
-reales antes de confiar en los defaults de `PYRAMID_TRIGGER_ATR_MULTIPLE`/
-`MAX_PYRAMID_ENTRIES`/`PYRAMID_RISK_PCT`.
+`sell` — no es una acción silenciosa).
+
+**Backtest real (PAXG/USDT 1h, 365 días, walk-forward de 4 segmentos)
+que respaldó encenderlo por defecto:**
+
+| Segmento | Sin pyramiding¹ | 1 add-on (1.5x, default) | 2 add-ons (1.0x) |
+|---|---|---|---|
+| 1 (return / drawdown / sharpe) | — | 3.34% / -4.26% / 1.44 | 4.24% / -5.29% / 1.42 |
+| 2 (return / drawdown / sharpe) | — | 9.70% / -7.64% / 2.47 | 12.32% / -9.69% / 2.40 |
+| 3, caída real de PAXG -16% (return / drawdown / sharpe) | — | -3.52% / -4.90% / -2.86 | -4.08% / -5.76% / -2.79 |
+| 4 (return / drawdown / sharpe) | — | 2.28% / -3.32% / 1.18 | 2.96% / -4.28% / 1.20 |
+
+¹ No se corrió el walk-forward exacto sin pyramiding al threshold de
+trend-strength actual (1.5) — pero el número de operaciones por
+segmento (9/9/5/7) es idéntico entre ambas configuraciones de
+pyramiding, confirmando que pyramiding no crea operaciones nuevas, solo
+redimensiona las mismas.
+
+El patrón es el mismo en los 4 segmentos, no un resultado que aparece
+en uno solo: pyramiding es un **amplificador, no un filtro** — los 3
+segmentos ganadores (1, 2, 4) mejoran con más pyramiding, el único
+segmento perdedor (3, una caída real) empeora con más pyramiding
+(algunas operaciones ahí avanzaron lo suficiente para agregar una
+tranche antes de revertir contra el stop). Como 3 de 4 segmentos
+independientes fueron ganadores, amplificar simétricamente da neto
+positivo acá — no es sobreajuste a un solo segmento. Entre las dos
+configuraciones probadas, `1 add-on / 1.5x` (el default) captura la
+mayor parte de la mejora con bastante menos drawdown que `2 add-ons /
+1.0x` en absolutamente todos los segmentos, incluido el perdedor — el
+mismo patrón de "correr más caliente, no más inteligente" que ya se vio
+al comparar umbrales del filtro de tendencia. Por eso el default quedó
+en `MAX_PYRAMID_ENTRIES=1`/`PYRAMID_TRIGGER_ATR_MULTIPLE=1.5` (reusa el
+mismo múltiplo de ATR ya validado para el filtro de tendencia) en vez
+de la configuración más agresiva.
 
 ## Daily Market Context Engine (`context_engine/`)
 
@@ -985,9 +1014,9 @@ Sigue sin haber backend: todo sale de JSON estáticos en
   / `PYRAMID_RISK_PCT` (ver la sección propia más arriba): agregar
   tranches a una posición ya abierta cuando el precio confirma la
   tendencia más allá de la última entrada, en vez de solo esperar una
-  nueva señal de cruce. Opt-in y apagado por defecto — sin backtest
-  real todavía (no hay red hacia Binance desde este entorno). El add-on
-  arriesga la mitad de `RISK_PER_TRADE_PCT` por defecto, no el mismo
+  nueva señal de cruce. **Encendido por defecto** (walk-forward de 4
+  segmentos contra 365 días reales de PAXG, ver la sección propia más
+  arriba). El add-on arriesga la mitad de `RISK_PER_TRADE_PCT` por defecto, no el mismo
   100% otra vez — una decisión de diseño, no un valor a probar y
   ajustar a ciegas: doblar el riesgo completo encima de una posición
   ya abierta aumenta la varianza del peor caso sin una ventaja

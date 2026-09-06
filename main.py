@@ -37,7 +37,7 @@ Which signal decides entries depends on config.USE_SETUP_ENGINE
     bearish reversal pattern — double-top, head-and-shoulders, or
     triangle (see patterns.py) — blocks a new entry too. Both are
     purely vetoes, never an extra exit trigger. If config.
-    USE_PYRAMIDING is also on (off by default), an already-open
+    USE_PYRAMIDING is also on (on by default, backtested -- see README), an already-open
     position can get up to MAX_PYRAMID_ENTRIES add-on tranches
     ("pyramid_add" — see risk_manager.py's own docstring and README's
     pyramiding section) once price has moved PYRAMID_TRIGGER_ATR_MULTIPLE
