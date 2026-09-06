@@ -1028,13 +1028,45 @@ reusar `AssetPanel` — ese componente asume un bot corriendo contra
 Binance Testnet ("en vivo contra Testnet" en su propio header), que
 acá directamente no aplica.
 
+**`forex_backtester.py`** (nuevo): en vez de escribir una estrategia
+distinta para Forex, corre **exactamente la misma** (EMA 20/50 +
+filtro de tendencia + pyramiding, todo ya validado con datos reales de
+PAXG) contra XAU/USD real vía OANDA — mismo activo (oro), mercado
+distinto, así que tiene sentido confirmar primero si lo que ya
+funciona ahí también funciona acá antes de construir algo nuevo. No
+duplica el motor de simulación: `backtester.run_backtest()`/
+`export_report()`/`split_into_segments()` son funciones puras sobre un
+DataFrame OHLCV, no les importa si las velas vinieron de Binance o de
+OANDA, así que `forex_backtester.py` es solo el fetch de datos +
+llamar a esas mismas funciones. Sus flags de CLI calcan uno a uno los
+de `backtester.py` (mismos nombres, mismos defaults) para que comparar
+PAXG contra XAU/USD nunca se confunda con "los dos CLI funcionan
+distinto":
+
+```bash
+python forex_backtester.py --days 365
+python forex_backtester.py --days 365 --walk-forward 4
+```
+
+**Inexactitud conocida, señalada a propósito, no escondida**: este
+backtest usa el precio **midpoint** de OANDA y reusa el mismo
+`TAKER_FEE_PCT` (comisión plana, el modelo correcto para Binance) como
+única aproximación de costo — el costo real en OANDA es el spread
+bid/ask, no una comisión porcentual, y operar al midpoint asume que ese
+spread no existe. Para XAU/USD el spread suele ser de unos pocos
+dólares contra un precio de miles — no es enorme, pero tampoco es cero,
+y este backtest hoy reporta como si lo fuera. Tratar todo lo que salga
+de acá como un límite superior optimista hasta que se incorpore un
+costo consciente del spread — si una estrategia gana por muy poco acá,
+no confiar en eso todavía.
+
 **Qué NO existe todavía, a propósito** (una cosa a la vez, mismo
-criterio que el resto de esta sesión): ninguna estrategia para Forex,
-ningún backtester, ninguna colocación de órdenes (`forex_executor.py`
-no existe), nada conectado a ningún ciclo de trading en vivo. Escribir
-lógica de órdenes sin poder probarla contra una cuenta real (ni
-siquiera demo) sería exactamente el tipo de código sin validar que
-esta sesión evitó todo el tiempo con el bot de PAXG/BTC.
+criterio que el resto de esta sesión): ninguna colocación de órdenes
+(`forex_executor.py` no existe), nada conectado a ningún ciclo de
+trading en vivo, ningún modelo de costo consciente del spread (ver
+arriba). Escribir lógica de órdenes sin poder probarla contra una
+cuenta real (ni siquiera demo) sería exactamente el tipo de código sin
+validar que esta sesión evitó todo el tiempo con el bot de PAXG/BTC.
 
 **Sin verificar contra una cuenta real todavía**: `forex_data_fetcher.py`
 está escrito directo desde la documentación pública de la API v20 de
@@ -1062,9 +1094,15 @@ API pública de Binance. Antes de confiar en él:
    Si esto tira un error o un formato inesperado, es un bug en
    `forex_data_fetcher.py` a corregir contra la respuesta real, no en
    la documentación de la que se escribió.
-4. Recién con eso funcionando: decidir una estrategia para Forex y
-   construir su backtester — ningún paso de acá en adelante existe
-   todavía.
+4. Recién con eso funcionando, correr el backtest real (ya construido,
+   ver arriba):
+   ```bash
+   python3.9 forex_backtester.py --days 365
+   python3.9 forex_backtester.py --days 365 --walk-forward 4
+   ```
+   y comparar directo contra los números ya conocidos de PAXG (11.87%
+   de retorno, Sharpe 1.14, profit factor 2.05 en la ventana completa)
+   antes de decidir si XAU/USD necesita una estrategia distinta.
 
 ## Dashboard (React)
 
