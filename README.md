@@ -112,6 +112,16 @@ que un segmento puede mostrar retorno positivo con 0% de win rate si
 sus únicas operaciones cerradas perdieron pero terminó con una
 ganancia de papel sin cerrar.
 
+> **BTC scalping: retirado, no en pausa.** Las secciones que siguen
+> (`--take-profit`, los flags de calibración) documentan lo que ya se
+> probó, no una lista de próximos pasos. Ver "Decisiones tomadas hasta
+> ahora" más abajo para el veredicto completo y los números que lo
+> respaldan: 0/3 segmentos de walk-forward ganadores, `profit_factor`
+> empeorando con cada ajuste, la estrategia (reversión a la media)
+> perdiendo contra un mercado que dejó de revertir. No es una estrategia
+> que le falte calibrar un poco más — es la hipótesis de fondo la que no
+> se sostiene contra el BTC real de este período.
+
 **`scalping_backtester.py --take-profit`** (BTC): a diferencia del
 `--take-profit` de `backtester.py` (un % fijo, probado y descartado
 para una estrategia de tendencia), acá el take-profit es el mismo
@@ -868,10 +878,11 @@ Sigue sin haber backend: todo sale de JSON estáticos en
   que modelar, así que sumar en el peor caso es la opción honesta y
   conservadora hasta que haya historial real multi-activo que
   justifique algo más fino. **Hoy está inactivo en la práctica**:
-  `scalping_backtester.py` no está conectado a ningún ciclo en vivo
-  (ver más abajo), así que el chequeo casi siempre ve balance cero del
-  otro activo — construido y testeado igual, listo para el día que BTC
-  sí opere en vivo
+  `scalping_backtester.py` está retirado (ver "Decisiones tomadas hasta
+  ahora" más abajo) y `main.py --trade` no lo conecta, así que el
+  chequeo casi siempre ve balance cero del otro activo — construido y
+  testeado igual, y sigue siendo la protección correcta si algún día
+  se agrega un segundo bot en vivo (no necesariamente BTC scalping)
 - [x] `risk_manager.position_size()` ahora descuenta comisiones: antes
   solo dimensionaba para que el movimiento de precio hasta el stop
   perdiera exactamente `RISK_PER_TRADE_PCT` — la pérdida real de una
@@ -1181,9 +1192,17 @@ Dinero real sigue siendo una decisión aparte y deliberada (ver
     peleando contra un mercado que rompió el rango y no volvió. Esto
     confirma, con tres ventanas independientes en vez de una sola, lo
     que ya sugerían los backtests previos (-32% → -2.99% → -2.81% a
-    medida que se ajustaba). **Decisión: no conectar este bot a
-    `main.py --trade` mientras no muestre una ventaja real** — seguir
-    afinándolo es un proyecto de tuneo aparte, no algo a apurar.
+    medida que se ajustaba). **Veredicto final: retirado, no solo sin
+    conectar.** El problema no es de calibración — cada ronda de ajuste
+    (RSI, ATR, reward:risk, take-profit) movió el resultado pero nunca
+    cruzó `profit_factor` 1.0 en más de un segmento a la vez, y el peor
+    tramo coincidiendo justo con una suba real del +24.24% es la firma
+    de una hipótesis de fondo (reversión a la media) que no se sostiene
+    contra el comportamiento real de BTC en este período, no una
+    ventana de mala suerte. `main.py --trade` no lo conecta y no hay
+    plan de hacerlo — el código queda en el repo como referencia (y por
+    si el régimen de BTC cambia lo suficiente como para revisitar la
+    hipótesis), no como una rama de desarrollo activa.
   - **El mismo walk-forward con `--take-profit`** (target de zona-premium
     en vez de solo el stop/señal de rango): -0.85%, -1.99%, -2.84% —
     **sigue en 0/3 segmentos ganadores**. Mejora el primer tramo

@@ -1,5 +1,12 @@
 """Range mean-reversion strategy for the BTC scalping bot.
 
+**Retired, not just untuned**: see scalping_backtester.py's own
+docstring and README's walk-forward section for why -- 0/3 out-of-sample
+segments profitable, worsening with every tuning attempt, the worst
+segment landing on a real BTC rally that broke the range this strategy
+assumes. Not connected to main.py --trade and not an active development
+track; kept for reference.
+
 This is deliberately a *different kind* of strategy from strategy.py's
 EMA crossover, not the same idea run on a faster clock. A fast EMA
 crossover on 5m candles mostly reacts to noise -- trend-following needs

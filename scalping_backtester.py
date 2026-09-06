@@ -2,6 +2,22 @@
 strategy (BTC scalping bot -- see README's "Automatizarlo" section for
 why it runs as its own cron, separate from the PAXG trend bot).
 
+**Retired, not just untuned** (see README's own walk-forward section
+for the numbers): 0/3 walk-forward segments profitable, profit_factor
+getting *worse* with every calibration attempt (0.60 -> 0.40 -> 0.18),
+and the worst segment landing exactly on a real +24.24% BTC rally --
+that's not noise, it's a mean-reversion strategy fighting a market that
+broke its range and never came back. Tuning parameters (lookback, RSI
+thresholds, reward:risk ratio, --take-profit) has already been tried
+across several sessions and never crossed profit_factor 1.0 in more
+than one segment at a time. The premise itself -- BTC trades in
+mean-reverting ranges on this timeframe -- doesn't hold up against
+2025-2026 BTC, not a calibration gap a few more parameter sweeps would
+close. **main.py --trade never wires this in**, and there's no plan to
+change that. The module stays for reference and in case BTC's regime
+changes enough to revisit the premise -- not as an active development
+track.
+
 Separate module from backtester.py for the same reason
 setup_engine_backtester.py is one too: a different strategy needs a
 different simulation loop (here: a structural stop off the range low
