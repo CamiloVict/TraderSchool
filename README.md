@@ -186,9 +186,12 @@ exchange (`executor.place_stop_loss_order`), al precio de
 — el último swing low confirmado (`context_engine.structure`, la misma
 pieza que ya usa el stop del Setup Engine), con un colchón de
 `STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE` ATRs, y caída al % fijo si no hay
-un swing usable todavía. Opt-in y apagado por defecto, como
-`USE_PATTERN_FILTER`/`USE_SETUP_ENGINE`: probalo con
-`backtester.py --structural-stop` antes de prenderlo en el cron. La
+un swing usable todavía. **Probado y descartado** (ver el detalle más
+abajo, en la sección de `USE_STRUCTURAL_STOP`): en vez de dar más
+margen a una tendencia fuerte, en PAXG a 1h el swing más reciente
+suele estar demasiado cerca del precio, así que el stop se dispara con
+retrocesos normales mucho más seguido que el plano — sigue apagado por
+defecto, con evidencia real detrás en vez de solo precaución. La
 posición se cierra por lo que ocurra primero: el stop-loss se dispara,
 o la EMA rápida vuelve a cruzar por debajo — en ese segundo caso, el
 ciclo cancela el stop antes de vender por mercado, porque el stop deja
@@ -448,9 +451,10 @@ produce un mercado en rango/choppy — el precio oscila cruzando ambas
 medias sin una tendencia real detrás, generando una señal que se
 revierte unas velas después (whipsaw) y, en PAXG, se come la comisión
 del round-trip sin ganar nada a cambio. `USE_TREND_STRENGTH_FILTER`
-está **encendido por defecto** (a diferencia de `USE_PATTERN_FILTER`/
-`USE_STRUCTURAL_STOP`, que siguen apagados a la espera de su propio
-backtest): una entrada nueva se bloquea si `trend_strength` está por
+está **encendido por defecto** (a diferencia de `USE_PATTERN_FILTER`,
+que sigue apagado a la espera de su propio backtest, y de
+`USE_STRUCTURAL_STOP`, que ya tiene el suyo — ver más abajo — y quedó
+descartado): una entrada nueva se bloquea si `trend_strength` está por
 debajo de `MIN_TREND_STRENGTH_ATR_MULTIPLE` (`--min-trend-strength`,
 default `1.5`) — acción `entry_blocked_by_weak_trend` en
 `main.py --trade`. Puro veto sobre entradas, nunca fuerza una salida.
@@ -572,6 +576,57 @@ al comparar umbrales del filtro de tendencia. Por eso el default quedó
 en `MAX_PYRAMID_ENTRIES=1`/`PYRAMID_TRIGGER_ATR_MULTIPLE=1.5` (reusa el
 mismo múltiplo de ATR ya validado para el filtro de tendencia) en vez
 de la configuración más agresiva.
+
+## Stop estructural: probado y descartado (`USE_STRUCTURAL_STOP`, apagado)
+
+```bash
+python backtester.py --source real --days 365 --structural-stop
+python backtester.py --source real --days 365 --walk-forward 4 --structural-stop
+```
+
+La hipótesis: reemplazar el stop plano (`STOP_LOSS_PCT`, 2%) por
+`risk_manager.structural_stop_price()` — el último swing low
+confirmado, con un colchón de `STRUCTURAL_STOP_ATR_BUFFER_MULTIPLE`
+ATRs — le daría más margen a una tendencia fuerte para respirar sin
+salir por ruido. Contra 365 días reales de PAXG/USDT 1h, sobre la
+misma configuración ya en producción (filtro de tendencia + pyramiding
+encendidos), pasó lo contrario:
+
+| | Sin structural stop | Con structural stop |
+|---|---|---|
+| total_return_pct | 11.87 | 13.51 |
+| num_trades | 30 | 42 |
+| win_rate_pct | 56.67 | 33.33 |
+| max_drawdown_pct | -11.16 | -17.15 |
+| stop_loss_exits | 6 | 26 |
+| sharpe_ratio | 1.14 | 0.87 |
+| profit_factor | 2.05 | 1.63 |
+| total_fees_paid | 39.97 | 92.96 |
+
+Y en el walk-forward de 4 segmentos (sharpe / profit_factor), peor en 3
+de 4:
+
+| Segmento | Sin structural stop | Con structural stop |
+|---|---|---|
+| 1 | 1.44 / 2.50 | 0.08 / 1.01 |
+| 2 | 2.47 / 4.88 | 2.62 / 3.77 |
+| 3 (caída real de PAXG) | -2.86 / 0.00 | -3.49 / 0.00 |
+| 4 | 1.18 / 2.01 | 0.46 / 1.31 |
+
+Casi 5 veces más salidas por stop-loss (6 → 26 en la ventana completa)
+y más del doble de operaciones (30 → 42) con la misma señal de entrada
+de base — la única explicación es que el stop estructural se dispara
+mucho más seguido que el plano. El retorno bruto termina parecido o
+incluso un poco mejor en algunos casos, pero a costa de mucha más
+varianza: drawdown más profundo, casi el doble de comisiones pagadas,
+Sharpe y profit factor peores en casi todos lados. El mecanismo más
+probable: en PAXG a 1h, los swings recientes se forman seguido y cerca
+del precio, así que un stop clavado ahí (incluso con el colchón de ATR)
+se lleva puesto por retrocesos normales mucho más seguido que el 2%
+plano, que le da más margen para respirar — lo opuesto de la hipótesis
+de partida. Por eso `USE_STRUCTURAL_STOP` sigue apagado, ahora con
+evidencia real detrás en vez de solo la precaución original de "no
+prender nada sin backtest".
 
 ## Daily Market Context Engine (`context_engine/`)
 
